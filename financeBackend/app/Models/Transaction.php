@@ -20,6 +20,11 @@ class Transaction extends Model
         'wrapped_gold_weight',
         'material_weight',
         'material_pieces',
+        'item_weights',
+        'gold_unit_price',
+        'silver_unit_price',
+        'reference_gold_price',
+        'reference_silver_price',
         'expense_category',
         'transaction_date',
         'remark',
@@ -33,6 +38,11 @@ class Transaction extends Model
             'wrapped_gold_weight' => 'decimal:3',
             'material_weight' => 'decimal:3',
             'material_pieces' => 'integer',
+            'item_weights' => 'array',
+            'gold_unit_price' => 'decimal:2',
+            'silver_unit_price' => 'decimal:2',
+            'reference_gold_price' => 'decimal:2',
+            'reference_silver_price' => 'decimal:2',
             'transaction_date' => 'date:Y-m-d',
         ];
     }

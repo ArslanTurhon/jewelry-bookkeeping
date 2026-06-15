@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
+use App\Support\AdminAccess;
 use App\Support\FinanceStats;
 use Illuminate\Http\Request;
 
@@ -11,8 +12,9 @@ class OpeningBalanceController extends Controller
 {
     public function show(Request $request, FinanceStats $stats)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'opening');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json($stats->openingBalances());
@@ -20,8 +22,9 @@ class OpeningBalanceController extends Controller
 
     public function store(Request $request, FinanceStats $stats)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'opening');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json($stats->saveOpeningBalances($request->validate([
@@ -29,10 +32,4 @@ class OpeningBalanceController extends Controller
         ])));
     }
 
-    private function admin(Request $request): ?AdminUser
-    {
-        $token = $request->bearerToken();
-
-        return $token ? AdminUser::query()->where('api_token', $token)->first() : null;
-    }
 }

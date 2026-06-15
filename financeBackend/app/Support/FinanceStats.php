@@ -13,6 +13,7 @@ class FinanceStats
         'online_bank' => 0,
         'online_wechat' => 0,
         'online_alipay' => 0,
+        'pure_gold_fund' => 0,
     ];
 
     public const STOCK_KEYS = [
@@ -50,6 +51,7 @@ class FinanceStats
             ->get();
 
         $cash = $this->opening('cash');
+        $pureGoldFund = $this->opening('pure_gold_fund');
         $online = [
             'bank' => $this->opening('online_bank'),
             'wechat' => $this->opening('online_wechat'),
@@ -61,16 +63,19 @@ class FinanceStats
             'scrap_stock' => $this->emptyBucket('scrap_stock'),
         ];
         $this->applyOpeningStock($stock);
+        $recycleCost = $this->emptyRecycleCost();
 
         foreach ($records as $record) {
             $amountSign = match ($record->business_type) {
-                'sale' => 1,
+                'sale', 'income' => 1,
                 'recycle', 'operating_expense' => -1,
                 default => 0,
             };
 
             if ($record->payment_account === 'cash') {
                 $cash += $amountSign * (float) $record->amount;
+            } elseif ($record->payment_account === 'pure_gold_fund') {
+                $pureGoldFund += $amountSign * (float) $record->amount;
             } elseif ($record->online_method) {
                 $online[$record->online_method] += $amountSign * (float) $record->amount;
             }
@@ -79,12 +84,16 @@ class FinanceStats
                 $this->applyStock($stock, $record, -1);
             } elseif ($record->business_type === 'recycle') {
                 $this->applyStock($stock, $record, 1);
+                $this->applyRecycleCost($recycleCost, $record);
             }
         }
 
         $monthlySales = (float) $monthly->where('business_type', 'sale')->sum('amount');
+        $monthlyIncome = (float) $monthly->where('business_type', 'income')->sum('amount');
         $monthlyRecycle = (float) $monthly->where('business_type', 'recycle')->sum('amount');
         $monthlyExpenses = (float) $monthly->where('business_type', 'operating_expense')->sum('amount');
+        $onlineTotal = array_sum($online);
+        $total = $cash + $onlineTotal + $pureGoldFund;
 
         return [
             'cash' => round($cash, 2),
@@ -92,17 +101,67 @@ class FinanceStats
                 'bank' => round($online['bank'], 2),
                 'wechat' => round($online['wechat'], 2),
                 'alipay' => round($online['alipay'], 2),
-                'total' => round(array_sum($online), 2),
+                'total' => round($onlineTotal, 2),
             ],
-            'total' => round($cash + array_sum($online), 2),
+            'pure_gold_fund' => round($pureGoldFund, 2),
+            'total' => round($total, 2),
             'stock' => $this->roundedStock($stock),
+            'recycle_cost' => $this->roundedRecycleCost($recycleCost),
             'month' => $month,
             'monthly' => [
                 'sales' => round($monthlySales, 2),
+                'income' => round($monthlyIncome, 2),
                 'recycle' => round($monthlyRecycle, 2),
                 'operating_expenses' => round($monthlyExpenses, 2),
-                'net' => round($monthlySales - $monthlyRecycle - $monthlyExpenses, 2),
+                'net' => round($monthlySales + $monthlyIncome - $monthlyRecycle - $monthlyExpenses, 2),
             ],
+        ];
+    }
+
+    public function accountDetails(string $account, ?string $month = null, string $range = 'month'): array
+    {
+        $records = Transaction::query()
+            ->orderBy('transaction_date')
+            ->orderBy('id')
+            ->get();
+
+        $keys = $this->accountKeys($account);
+        $opening = collect($keys)->sum(fn (string $key) => $this->opening($key));
+        $balance = $opening;
+        $entries = [];
+
+        foreach ($records as $record) {
+            $signed = $this->signedAmountForAccount($record, $account);
+            if ($signed === null) {
+                continue;
+            }
+
+            $balance += $signed;
+            $date = (string) $record->transaction_date->format('Y-m-d');
+            $inRange = $range === 'all' || ! $month || str_starts_with($date, $month);
+
+            if ($inRange) {
+                $entries[] = [
+                    'id' => $record->id,
+                    'transaction_date' => $date,
+                    'business_type' => $record->business_type,
+                    'payment_account' => $record->payment_account,
+                    'online_method' => $record->online_method,
+                    'amount' => round((float) $record->amount, 2),
+                    'signed_amount' => round($signed, 2),
+                    'balance_after' => round($balance, 2),
+                    'remark' => $record->remark,
+                ];
+            }
+        }
+
+        return [
+            'account' => $account,
+            'range' => $range,
+            'month' => $month,
+            'opening' => round($opening, 2),
+            'ending' => round($balance, 2),
+            'entries' => array_reverse($entries),
         ];
     }
 
@@ -185,6 +244,84 @@ class FinanceStats
             $bucket['copper_weight'] += $sign * (float) $record->material_weight;
         }
         $bucket['pieces'] += $sign * (int) $record->material_pieces;
+    }
+
+    private function emptyRecycleCost(): array
+    {
+        return [
+            'pure_gold' => ['amount' => 0, 'pure_gold_weight' => 0],
+            'gold_wrapped_silver' => ['amount' => 0, 'wrapped_gold_weight' => 0, 'silver_weight' => 0],
+        ];
+    }
+
+    private function applyRecycleCost(array &$cost, Transaction $record): void
+    {
+        if ($record->product_type === 'pure_gold') {
+            $cost['pure_gold']['amount'] += (float) $record->amount;
+            $cost['pure_gold']['pure_gold_weight'] += (float) $record->pure_gold_weight;
+        }
+
+        if ($record->product_type === 'gold_wrapped' && $record->wrap_material === 'silver') {
+            $cost['gold_wrapped_silver']['amount'] += (float) $record->amount;
+            $cost['gold_wrapped_silver']['wrapped_gold_weight'] += (float) $record->wrapped_gold_weight;
+            $cost['gold_wrapped_silver']['silver_weight'] += (float) $record->material_weight;
+        }
+    }
+
+    private function roundedRecycleCost(array $cost): array
+    {
+        $goldWeight = $cost['pure_gold']['pure_gold_weight'];
+        $wrappedGoldWeight = $cost['gold_wrapped_silver']['wrapped_gold_weight'];
+        $silverWeight = $cost['gold_wrapped_silver']['silver_weight'];
+
+        return [
+            'pure_gold' => [
+                'amount' => round($cost['pure_gold']['amount'], 2),
+                'pure_gold_weight' => round($goldWeight, 3),
+                'average_gold_price' => $goldWeight > 0 ? round($cost['pure_gold']['amount'] / $goldWeight, 2) : 0,
+            ],
+            'gold_wrapped_silver' => [
+                'amount' => round($cost['gold_wrapped_silver']['amount'], 2),
+                'wrapped_gold_weight' => round($wrappedGoldWeight, 3),
+                'silver_weight' => round($silverWeight, 3),
+                'average_total_price_per_gold_gram' => $wrappedGoldWeight > 0 ? round($cost['gold_wrapped_silver']['amount'] / $wrappedGoldWeight, 2) : 0,
+                'average_total_price_per_material_gram' => $silverWeight > 0 ? round($cost['gold_wrapped_silver']['amount'] / $silverWeight, 2) : 0,
+            ],
+        ];
+    }
+
+    private function signedAmountForAccount(Transaction $record, string $account): ?float
+    {
+        $matches = match ($account) {
+            'cash' => $record->payment_account === 'cash',
+            'online' => $record->payment_account === 'online',
+            'pure_gold_fund' => $record->payment_account === 'pure_gold_fund',
+            'total' => true,
+            default => false,
+        };
+
+        if (! $matches) {
+            return null;
+        }
+
+        $sign = match ($record->business_type) {
+            'sale', 'income' => 1,
+            'recycle', 'operating_expense' => -1,
+            default => 0,
+        };
+
+        return $sign * (float) $record->amount;
+    }
+
+    private function accountKeys(string $account): array
+    {
+        return match ($account) {
+            'cash' => ['cash'],
+            'online' => ['online_bank', 'online_wechat', 'online_alipay'],
+            'pure_gold_fund' => ['pure_gold_fund'],
+            'total' => ['cash', 'online_bank', 'online_wechat', 'online_alipay', 'pure_gold_fund'],
+            default => [],
+        };
     }
 
     private function roundedStock(array $stock): array

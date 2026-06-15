@@ -10,8 +10,8 @@ class BusinessDictionary
     public const DEFAULT_LANGUAGE = 'zh-CN';
 
     public const ENUMS = [
-        'business_type' => ['sale', 'recycle', 'operating_expense'],
-        'payment_account' => ['cash', 'online'],
+        'business_type' => ['sale', 'recycle', 'income', 'operating_expense'],
+        'payment_account' => ['cash', 'online', 'pure_gold_fund'],
         'online_method' => ['bank', 'wechat', 'alipay'],
         'stock_bucket' => ['sale_stock', 'scrap_stock'],
         'product_type' => ['pure_gold', 'pure_silver', 'gold_wrapped'],
@@ -39,6 +39,7 @@ class BusinessDictionary
             'action.relogin' => '重新登录',
             'label.cash' => '现金',
             'label.online' => '线上',
+            'label.pure_gold_fund' => '纯金回收资金',
             'label.total' => '合计',
             'label.sale_stock' => '销售库存',
             'label.scrap_stock' => '旧料库',
@@ -91,9 +92,11 @@ class BusinessDictionary
             'language.test-LANG' => '测试语言',
             'business_type.sale' => '销售',
             'business_type.recycle' => '回收',
+            'business_type.income' => '收入',
             'business_type.operating_expense' => '店铺成本支出',
             'payment_account.cash' => '现金',
             'payment_account.online' => '线上',
+            'payment_account.pure_gold_fund' => '纯金回收资金',
             'online_method.bank' => '银行',
             'online_method.wechat' => '微信',
             'online_method.alipay' => '支付宝',

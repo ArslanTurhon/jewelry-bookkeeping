@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Models\Language;
 use App\Models\Translation;
+use App\Support\AdminAccess;
 use App\Support\BusinessDictionary;
 use Illuminate\Http\Request;
 
@@ -13,8 +14,9 @@ class I18nController extends Controller
 {
     public function catalog(Request $request, BusinessDictionary $dictionary)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request);
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json($dictionary->catalog(
@@ -24,8 +26,9 @@ class I18nController extends Controller
 
     public function languages(Request $request)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json(Language::query()->orderBy('sort_order')->get());
@@ -33,8 +36,9 @@ class I18nController extends Controller
 
     public function saveLanguage(Request $request)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         $data = $request->validate([
@@ -52,8 +56,9 @@ class I18nController extends Controller
 
     public function translations(Request $request)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json(Translation::query()
@@ -64,8 +69,9 @@ class I18nController extends Controller
 
     public function saveTranslation(Request $request)
     {
-        if (! $this->admin($request)) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         $data = $request->validate([
@@ -80,10 +86,4 @@ class I18nController extends Controller
         ));
     }
 
-    private function admin(Request $request): ?AdminUser
-    {
-        $token = $request->bearerToken();
-
-        return $token ? AdminUser::query()->where('api_token', $token)->first() : null;
-    }
 }

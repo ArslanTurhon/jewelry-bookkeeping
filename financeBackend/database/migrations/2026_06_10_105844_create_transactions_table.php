@@ -14,8 +14,8 @@ return new class extends Migration
         Schema::create('transactions', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->enum('business_type', ['sale', 'recycle', 'operating_expense']);
-            $table->enum('payment_account', ['cash', 'online']);
+            $table->enum('business_type', ['sale', 'recycle', 'income', 'operating_expense']);
+            $table->enum('payment_account', ['cash', 'online', 'pure_gold_fund']);
             $table->enum('online_method', ['bank', 'wechat', 'alipay'])->nullable();
             $table->decimal('amount', 12, 2);
             $table->enum('stock_bucket', ['sale_stock', 'scrap_stock'])->nullable();

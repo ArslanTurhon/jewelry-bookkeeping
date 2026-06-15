@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Models\AdminUser;
 use App\Models\Category;
 use App\Http\Controllers\Controller;
+use App\Support\AdminAccess;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -12,8 +13,9 @@ class CategoryController extends Controller
 {
     public function index(Request $request)
     {
-        if (! $this->admin($request)) {
-            return $this->unauthorized();
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         return response()->json(
@@ -23,8 +25,9 @@ class CategoryController extends Controller
 
     public function store(Request $request)
     {
-        if (! $this->admin($request)) {
-            return $this->unauthorized();
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         $category = Category::query()->create($this->validatedData($request));
@@ -34,8 +37,9 @@ class CategoryController extends Controller
 
     public function update(Request $request, Category $category)
     {
-        if (! $this->admin($request)) {
-            return $this->unauthorized();
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         $category->update($this->validatedData($request));
@@ -45,8 +49,9 @@ class CategoryController extends Controller
 
     public function destroy(Request $request, Category $category)
     {
-        if (! $this->admin($request)) {
-            return $this->unauthorized();
+        $admin = AdminAccess::require($request, 'users');
+        if (! $admin instanceof AdminUser) {
+            return $admin;
         }
 
         if ($category->transactions()->exists()) {
@@ -68,15 +73,4 @@ class CategoryController extends Controller
         ]);
     }
 
-    private function admin(Request $request): ?AdminUser
-    {
-        $token = $request->bearerToken();
-
-        return $token ? AdminUser::query()->where('api_token', $token)->first() : null;
-    }
-
-    private function unauthorized()
-    {
-        return response()->json(['message' => 'Unauthenticated'], 401);
-    }
 }

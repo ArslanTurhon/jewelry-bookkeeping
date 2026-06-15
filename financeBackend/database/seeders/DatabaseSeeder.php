@@ -21,6 +21,7 @@ class DatabaseSeeder extends Seeder
     {
         $legacyCategories = [
             ['name' => '销售', 'type' => 'income', 'color' => '#16a34a'],
+            ['name' => '收入', 'type' => 'income', 'color' => '#2563eb'],
             ['name' => '回收', 'type' => 'expense', 'color' => '#f97316'],
             ['name' => '店铺成本', 'type' => 'expense', 'color' => '#64748b'],
         ];
@@ -37,6 +38,9 @@ class DatabaseSeeder extends Seeder
             [
                 'name' => '管理员',
                 'password' => Hash::make(env('ADMIN_PASSWORD', 'password')),
+                'is_super_admin' => true,
+                'enabled' => true,
+                'permissions' => array_keys(AdminUser::PERMISSIONS),
             ],
         );
 
@@ -75,6 +79,7 @@ class DatabaseSeeder extends Seeder
             'action.relogin' => 'قايتا كىرىش',
             'label.cash' => 'نەق پۇل',
             'label.online' => 'تور',
+            'label.pure_gold_fund' => 'ساپ ئالتۇن قايتۇرۇش مەبلىغى',
             'label.total' => 'جەمئى',
             'label.sale_stock' => 'سېتىش ئامبىرى',
             'label.scrap_stock' => 'كونا ماتېرىيال ئامبىرى',
@@ -127,9 +132,11 @@ class DatabaseSeeder extends Seeder
             'language.test-LANG' => 'سىناق تىل',
             'business_type.sale' => 'سېتىش',
             'business_type.recycle' => 'قايتۇرۇپ سېتىۋېلىش',
+            'business_type.income' => 'كىرىم',
             'business_type.operating_expense' => 'دۇكان خىراجىتى',
             'payment_account.cash' => 'نەق پۇل',
             'payment_account.online' => 'تور',
+            'payment_account.pure_gold_fund' => 'ساپ ئالتۇن قايتۇرۇش مەبلىغى',
             'online_method.bank' => 'بانكا',
             'online_method.wechat' => 'ۋېيشىن',
             'online_method.alipay' => 'ئەلىپاي',
