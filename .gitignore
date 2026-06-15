@@ -1,0 +1,20 @@
+.DS_Store
+
+# Backend
+financeBackend/.env
+financeBackend/.phpunit.result.cache
+financeBackend/vendor/
+financeBackend/node_modules/
+financeBackend/storage/logs/
+financeBackend/storage/framework/cache/
+financeBackend/storage/framework/sessions/
+financeBackend/storage/framework/views/
+financeBackend/database/database.sqlite
+
+# Frontend
+financeFrontend/.env
+financeFrontend/node_modules/
+financeFrontend/dist/
+
+# WeChat mini program
+financeApp/project.private.config.json

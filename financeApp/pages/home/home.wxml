@@ -1,0 +1,50 @@
+<view class="page">
+  <view class="toolbar">
+    <view>
+      <view class="title">{{labels.title}}</view>
+      <text class="muted">{{month}}</text>
+    </view>
+    <picker mode="date" fields="month" value="{{month}}" bindchange="onMonthChange">
+      <view class="chip">{{labels.switchMonth}}</view>
+    </picker>
+  </view>
+
+  <view wx:if="{{stats}}" class="card hero">
+    <text>{{labels.total}}</text>
+    <view class="balance">¥{{stats.total}}</view>
+    <view class="money-grid">
+      <view><text>{{labels.cash}}</text><strong>¥{{stats.cash}}</strong></view>
+      <view><text>{{labels.online}}</text><strong>¥{{stats.online.total}}</strong></view>
+      <view><text>{{labels.bank}}</text><strong>¥{{stats.online.bank}}</strong></view>
+      <view><text>{{labels.wechat}}</text><strong>¥{{stats.online.wechat}}</strong></view>
+      <view><text>{{labels.alipay}}</text><strong>¥{{stats.online.alipay}}</strong></view>
+    </view>
+  </view>
+
+  <view wx:if="{{stats}}" class="summary">
+    <view class="card"><text class="muted">{{labels.monthSales}}</text><view class="amount-income">¥{{stats.monthly.sales}}</view></view>
+    <view class="card"><text class="muted">{{labels.monthRecycle}}</text><view class="amount-expense">¥{{stats.monthly.recycle}}</view></view>
+    <view class="card"><text class="muted">{{labels.monthExpense}}</text><view class="amount-expense">¥{{stats.monthly.operating_expenses}}</view></view>
+    <view class="card"><text class="muted">{{labels.netChange}}</text><view class="{{stats.monthly.net >= 0 ? 'amount-income' : 'amount-expense'}}">¥{{stats.monthly.net}}</view></view>
+  </view>
+
+  <view wx:if="{{stats}}" class="card">
+    <view class="section-title">{{labels.saleStock}}</view>
+    <view class="stock-grid">
+      <view><text>{{labels.pureGold}}</text><strong>{{stats.stock.sale_stock.summary.pure_gold_weight}}g</strong></view>
+      <view><text>{{labels.wrappedGold}}</text><strong>{{stats.stock.sale_stock.summary.wrapped_gold_weight}}g</strong></view>
+      <view><text>{{labels.silver}}</text><strong>{{stats.stock.sale_stock.summary.silver_weight}}g</strong></view>
+      <view><text>{{labels.copper}}</text><strong>{{stats.stock.sale_stock.summary.copper_weight}}g</strong></view>
+    </view>
+  </view>
+
+  <view wx:if="{{stats}}" class="card">
+    <view class="section-title">{{labels.scrapStock}}</view>
+    <view class="stock-grid">
+      <view><text>{{labels.pureGold}}</text><strong>{{stats.stock.scrap_stock.summary.pure_gold_weight}}g</strong></view>
+      <view><text>{{labels.wrappedGold}}</text><strong>{{stats.stock.scrap_stock.summary.wrapped_gold_weight}}g</strong></view>
+      <view><text>{{labels.silver}}</text><strong>{{stats.stock.scrap_stock.summary.silver_weight}}g</strong></view>
+      <view><text>{{labels.copper}}</text><strong>{{stats.stock.scrap_stock.summary.copper_weight}}g</strong></view>
+    </view>
+  </view>
+</view>

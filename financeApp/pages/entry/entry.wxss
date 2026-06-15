@@ -1,0 +1,41 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 24rpx;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16rpx;
+}
+
+.segmented.three {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.segmented button {
+  background: #eef3fa;
+  color: #172033;
+  font-size: 26rpx;
+  padding: 0;
+}
+
+.segmented button.active {
+  background: #1f6feb;
+  color: #fff;
+}
+
+.picker {
+  min-height: 80rpx;
+  display: flex;
+  align-items: center;
+  border: 1rpx solid #d7deea;
+  border-radius: 10rpx;
+  padding: 0 20rpx;
+}
+
+textarea {
+  min-height: 160rpx;
+  padding-top: 20rpx;
+}

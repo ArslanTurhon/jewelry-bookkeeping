@@ -1,0 +1,44 @@
+page {
+  background: #f5f7fb;
+  color: #172033;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.page {
+  padding: 24rpx;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 12rpx;
+  padding: 28rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 8rpx 24rpx rgba(23, 32, 51, 0.06);
+}
+
+.muted {
+  color: #69768c;
+}
+
+.amount-income {
+  color: #16803c;
+}
+
+.amount-expense {
+  color: #c2410c;
+}
+
+button.primary {
+  background: #1f6feb;
+  color: #fff;
+}
+
+input,
+picker,
+textarea {
+  min-height: 80rpx;
+  border: 1rpx solid #d7deea;
+  border-radius: 10rpx;
+  background: #fff;
+  padding: 0 20rpx;
+}

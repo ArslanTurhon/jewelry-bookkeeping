@@ -1,0 +1,42 @@
+<view class="page">
+  <view class="card form">
+    <view class="section-title">{{labels.businessType}}</view>
+    <view class="segmented three">
+      <button wx:for="{{businessTypes}}" wx:key="code" data-code="{{item.code}}" bindtap="setBusiness" class="{{form.business_type === item.code ? 'active' : ''}}">{{item.label}}</button>
+    </view>
+
+    <view class="section-title">{{labels.paymentAccount}}</view>
+    <view class="segmented">
+      <button wx:for="{{paymentAccounts}}" wx:key="code" data-code="{{item.code}}" bindtap="setPayment" class="{{form.payment_account === item.code ? 'active' : ''}}">{{item.label}}</button>
+    </view>
+    <picker wx:if="{{form.payment_account === 'online'}}" range="{{onlineMethods}}" range-key="label" bindchange="onOnlineChange">
+      <view class="picker">{{labels.onlineMethod}}：{{form.online_method || 'bank'}}</view>
+    </picker>
+
+    <input type="digit" placeholder="{{labels.amount}}" value="{{form.amount}}" data-field="amount" bindinput="onInput" />
+
+    <block wx:if="{{form.business_type !== 'operating_expense'}}">
+      <picker range="{{productTypes}}" range-key="label" bindchange="onProductChange">
+        <view class="picker">{{labels.product}}：{{productLabel}}</view>
+      </picker>
+
+      <input wx:if="{{form.product_type === 'pure_gold'}}" type="digit" placeholder="{{labels.pureGoldWeight}}" value="{{form.pure_gold_weight}}" data-field="pure_gold_weight" bindinput="onInput" />
+      <input wx:if="{{form.product_type === 'pure_silver'}}" type="digit" placeholder="{{labels.silverWeight}}" value="{{form.material_weight}}" data-field="material_weight" bindinput="onInput" />
+      <input wx:if="{{form.product_type === 'gold_wrapped'}}" type="digit" placeholder="{{labels.wrappedGoldWeight}}" value="{{form.wrapped_gold_weight}}" data-field="wrapped_gold_weight" bindinput="onInput" />
+      <input wx:if="{{form.product_type === 'gold_wrapped'}}" type="digit" placeholder="{{secondWeightLabel}}" value="{{form.material_weight}}" data-field="material_weight" bindinput="onInput" />
+      <input type="number" placeholder="{{labels.pieces}}" value="{{form.material_pieces}}" data-field="material_pieces" bindinput="onInput" />
+    </block>
+
+    <block wx:else>
+      <picker range="{{expenseCategories}}" range-key="label" bindchange="onExpenseChange">
+        <view class="picker">{{labels.expenseCategory}}：{{form.expense_category}}</view>
+      </picker>
+    </block>
+
+    <picker mode="date" value="{{form.transaction_date}}" bindchange="onDateChange">
+      <view class="picker">{{labels.date}}：{{form.transaction_date}}</view>
+    </picker>
+    <textarea placeholder="{{labels.remark}}" value="{{form.remark}}" data-field="remark" bindinput="onInput"></textarea>
+    <button class="primary" bindtap="submit">{{labels.save}}</button>
+  </view>
+</view>

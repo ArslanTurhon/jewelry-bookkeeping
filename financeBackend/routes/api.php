@@ -1,0 +1,44 @@
+<?php
+
+use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
+use App\Http\Controllers\Api\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Api\Admin\I18nController as AdminI18nController;
+use App\Http\Controllers\Api\Admin\OpeningBalanceController as AdminOpeningBalanceController;
+use App\Http\Controllers\Api\Admin\TransactionController as AdminTransactionController;
+use App\Http\Controllers\Api\App\AuthController as AppAuthController;
+use App\Http\Controllers\Api\App\CategoryController as AppCategoryController;
+use App\Http\Controllers\Api\App\I18nController as AppI18nController;
+use App\Http\Controllers\Api\App\OpeningBalanceController as AppOpeningBalanceController;
+use App\Http\Controllers\Api\App\TransactionController as AppTransactionController;
+use Illuminate\Support\Facades\Route;
+
+Route::prefix('app')->group(function (): void {
+    Route::get('i18n', AppI18nController::class);
+    Route::post('login', [AppAuthController::class, 'login']);
+    Route::get('categories', [AppCategoryController::class, 'index']);
+    Route::get('transactions', [AppTransactionController::class, 'index']);
+    Route::post('transactions', [AppTransactionController::class, 'store']);
+    Route::put('transactions/{transaction}', [AppTransactionController::class, 'update']);
+    Route::delete('transactions/{transaction}', [AppTransactionController::class, 'destroy']);
+    Route::get('stats/monthly', [AppTransactionController::class, 'monthlyStats']);
+    Route::get('stats/current', [AppTransactionController::class, 'currentStats']);
+    Route::get('opening-balance', [AppOpeningBalanceController::class, 'show']);
+    Route::post('opening-balance', [AppOpeningBalanceController::class, 'store']);
+});
+
+Route::prefix('admin')->group(function (): void {
+    Route::post('login', [AdminAuthController::class, 'login']);
+    Route::get('me', [AdminAuthController::class, 'me']);
+    Route::post('logout', [AdminAuthController::class, 'logout']);
+    Route::apiResource('categories', AdminCategoryController::class)->except(['show']);
+    Route::get('transactions', [AdminTransactionController::class, 'index']);
+    Route::get('stats/monthly', [AdminTransactionController::class, 'monthlyStats']);
+    Route::get('stats/current', [AdminTransactionController::class, 'currentStats']);
+    Route::get('opening-balance', [AdminOpeningBalanceController::class, 'show']);
+    Route::post('opening-balance', [AdminOpeningBalanceController::class, 'store']);
+    Route::get('i18n', [AdminI18nController::class, 'catalog']);
+    Route::get('languages', [AdminI18nController::class, 'languages']);
+    Route::post('languages', [AdminI18nController::class, 'saveLanguage']);
+    Route::get('translations', [AdminI18nController::class, 'translations']);
+    Route::post('translations', [AdminI18nController::class, 'saveTranslation']);
+});
