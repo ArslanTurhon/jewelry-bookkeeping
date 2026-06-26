@@ -72,12 +72,14 @@ class FinanceStats
                 default => 0,
             };
 
-            if ($record->payment_account === 'cash') {
-                $cash += $amountSign * (float) $record->amount;
+            if ($cashAmount = $this->cashAmount($record)) {
+                $cash += $amountSign * $cashAmount;
             } elseif ($record->payment_account === 'pure_gold_fund') {
                 $pureGoldFund += $amountSign * (float) $record->amount;
-            } elseif ($record->online_method) {
-                $online[$record->online_method] += $amountSign * (float) $record->amount;
+            }
+
+            if ($record->online_method && ($onlineAmount = $this->onlineAmount($record))) {
+                $online[$record->online_method] += $amountSign * $onlineAmount;
             }
 
             if ($record->business_type === 'sale') {
@@ -292,25 +294,51 @@ class FinanceStats
 
     private function signedAmountForAccount(Transaction $record, string $account): ?float
     {
-        $matches = match ($account) {
-            'cash' => $record->payment_account === 'cash',
-            'online' => $record->payment_account === 'online',
-            'pure_gold_fund' => $record->payment_account === 'pure_gold_fund',
-            'total' => true,
-            default => false,
-        };
-
-        if (! $matches) {
-            return null;
-        }
-
         $sign = match ($record->business_type) {
             'sale', 'income' => 1,
             'recycle', 'operating_expense' => -1,
             default => 0,
         };
 
-        return $sign * (float) $record->amount;
+        $amount = match ($account) {
+            'cash' => $this->cashAmount($record),
+            'online' => $this->onlineAmount($record),
+            'pure_gold_fund' => $record->payment_account === 'pure_gold_fund' ? (float) $record->amount : null,
+            'total' => (float) $record->amount,
+            default => null,
+        };
+
+        return $amount === null || $amount == 0.0 ? null : $sign * $amount;
+    }
+
+    private function cashAmount(Transaction $record): ?float
+    {
+        if ($record->payment_account === 'cash') {
+            return (float) $record->amount;
+        }
+
+        if ($record->payment_account === 'mixed') {
+            return (float) $record->cash_amount;
+        }
+
+        return null;
+    }
+
+    private function onlineAmount(Transaction $record): ?float
+    {
+        if (! $record->online_method) {
+            return null;
+        }
+
+        if ($record->payment_account === 'online') {
+            return (float) $record->amount;
+        }
+
+        if ($record->payment_account === 'mixed') {
+            return (float) $record->online_amount;
+        }
+
+        return null;
     }
 
     private function accountKeys(string $account): array

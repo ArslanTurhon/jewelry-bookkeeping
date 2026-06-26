@@ -13,6 +13,9 @@ class Transaction extends Model
         'payment_account',
         'online_method',
         'amount',
+        'cash_amount',
+        'online_amount',
+        'recycle_price_rate',
         'stock_bucket',
         'product_type',
         'wrap_material',
@@ -34,6 +37,9 @@ class Transaction extends Model
     {
         return [
             'amount' => 'decimal:2',
+            'cash_amount' => 'decimal:2',
+            'online_amount' => 'decimal:2',
+            'recycle_price_rate' => 'decimal:2',
             'pure_gold_weight' => 'decimal:3',
             'wrapped_gold_weight' => 'decimal:3',
             'material_weight' => 'decimal:3',

@@ -99,9 +99,12 @@ class TransactionController extends Controller
     {
         $data = $request->validate([
             'business_type' => ['required', Rule::in(['sale', 'recycle', 'income', 'operating_expense'])],
-            'payment_account' => ['required', Rule::in(['cash', 'online', 'pure_gold_fund'])],
+            'payment_account' => ['required', Rule::in(['cash', 'online', 'mixed', 'pure_gold_fund'])],
             'online_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay'])],
             'amount' => ['required', 'numeric', 'min:0.01', 'max:999999999.99'],
+            'cash_amount' => ['nullable', 'numeric', 'min:0', 'max:999999999.99'],
+            'online_amount' => ['nullable', 'numeric', 'min:0', 'max:999999999.99'],
+            'recycle_price_rate' => ['nullable', 'numeric', 'min:0.01', 'max:100'],
             'stock_bucket' => ['nullable', Rule::in(['sale_stock', 'scrap_stock'])],
             'product_type' => ['nullable', Rule::in(['pure_gold', 'pure_silver', 'gold_wrapped'])],
             'wrap_material' => ['nullable', Rule::in(['silver', 'copper'])],
@@ -124,11 +127,22 @@ class TransactionController extends Controller
             'remark' => ['nullable', 'string', 'max:255'],
         ]);
 
-        if ($data['payment_account'] === 'online' && empty($data['online_method'])) {
+        if (in_array($data['payment_account'], ['online', 'mixed'], true) && empty($data['online_method'])) {
             abort(response()->json(['message' => '线上收支必须选择银行、微信或支付宝'], 422));
         }
-        if ($data['payment_account'] !== 'online' && ! empty($data['online_method'])) {
+        if (! in_array($data['payment_account'], ['online', 'mixed'], true) && ! empty($data['online_method'])) {
             abort(response()->json(['message' => '非线上账户不能选择线上方式'], 422));
+        }
+        if ($data['payment_account'] === 'pure_gold_fund' && ! in_array($data['business_type'], ['income', 'recycle'], true)) {
+            abort(response()->json(['message' => '纯金回收资金仅用于收入和回收'], 422));
+        }
+        if ($data['payment_account'] === 'mixed') {
+            $cashAmount = (float) ($data['cash_amount'] ?? 0);
+            $onlineAmount = (float) ($data['online_amount'] ?? 0);
+            if ($cashAmount <= 0 || $onlineAmount <= 0) {
+                abort(response()->json(['message' => '混合支付必须填写现金金额和线上金额'], 422));
+            }
+            $data['amount'] = round($cashAmount + $onlineAmount, 2);
         }
         if ($data['business_type'] === 'operating_expense' && empty($data['expense_category'])) {
             abort(response()->json(['message' => '店铺成本支出必须选择分类'], 422));
@@ -142,16 +156,19 @@ class TransactionController extends Controller
         if (($data['product_type'] ?? null) === 'gold_wrapped' && empty($data['wrap_material'])) {
             abort(response()->json(['message' => '金包类必须选择银或铜'], 422));
         }
+        if ($data['business_type'] !== 'recycle') {
+            $data['recycle_price_rate'] = 100;
+        } else {
+            $data['recycle_price_rate'] = round((float) ($data['recycle_price_rate'] ?? 100), 2);
+        }
 
         return $data;
     }
 
     private function normalize(array $data): array
     {
-        $data['online_method'] = $data['payment_account'] === 'online' ? $data['online_method'] : null;
-
         if (in_array($data['business_type'], ['income', 'operating_expense'], true)) {
-            return array_merge($data, [
+            return $this->normalizePaymentAmounts(array_merge($data, [
                 'stock_bucket' => null,
                 'product_type' => null,
                 'wrap_material' => null,
@@ -160,17 +177,37 @@ class TransactionController extends Controller
                 'material_weight' => 0,
                 'material_pieces' => 0,
                 'item_weights' => null,
-            ]);
+                'recycle_price_rate' => 100,
+            ]));
         }
 
         $data['stock_bucket'] = $data['business_type'] === 'sale' ? 'sale_stock' : 'scrap_stock';
         $data['expense_category'] = null;
+        $data['recycle_price_rate'] = $data['business_type'] === 'recycle' ? ($data['recycle_price_rate'] ?? 100) : 100;
         $data = $this->applyItemWeights($data);
         $data['pure_gold_weight'] = $data['product_type'] === 'pure_gold' ? ($data['pure_gold_weight'] ?? 0) : 0;
         $data['wrapped_gold_weight'] = $data['product_type'] === 'gold_wrapped' ? ($data['wrapped_gold_weight'] ?? 0) : 0;
         $data['material_weight'] = in_array($data['product_type'], ['pure_silver', 'gold_wrapped'], true) ? ($data['material_weight'] ?? 0) : 0;
         $data['material_pieces'] = $data['material_pieces'] ?? 0;
         $data['wrap_material'] = $data['product_type'] === 'gold_wrapped' ? $data['wrap_material'] : null;
+
+        return $this->normalizePaymentAmounts($data);
+    }
+
+    private function normalizePaymentAmounts(array $data): array
+    {
+        $data['online_method'] = in_array($data['payment_account'], ['online', 'mixed'], true) ? $data['online_method'] : null;
+
+        if ($data['payment_account'] === 'mixed') {
+            $data['cash_amount'] = round((float) ($data['cash_amount'] ?? 0), 2);
+            $data['online_amount'] = round((float) ($data['online_amount'] ?? 0), 2);
+            $data['amount'] = round($data['cash_amount'] + $data['online_amount'], 2);
+
+            return $data;
+        }
+
+        $data['cash_amount'] = $data['payment_account'] === 'cash' ? round((float) ($data['amount'] ?? 0), 2) : 0;
+        $data['online_amount'] = $data['payment_account'] === 'online' ? round((float) ($data['amount'] ?? 0), 2) : 0;
 
         return $data;
     }
@@ -184,12 +221,14 @@ class TransactionController extends Controller
                 $materialWeight = round((float) ($item['material_weight'] ?? 0), 3);
                 $goldUnitPrice = round((float) ($item['gold_unit_price'] ?? $data['gold_unit_price'] ?? 0), 2);
                 $silverUnitPrice = round((float) ($item['silver_unit_price'] ?? $data['silver_unit_price'] ?? 0), 2);
+                $rate = $data['business_type'] === 'recycle' ? ((float) ($data['recycle_price_rate'] ?? 100) / 100) : 1;
 
                 $amount = match ($data['product_type']) {
                     'pure_gold' => $goldWeight * $goldUnitPrice,
                     'gold_wrapped' => ($wrappedGoldWeight * $goldUnitPrice) + ($materialWeight * $silverUnitPrice),
                     default => $materialWeight * $silverUnitPrice,
                 };
+                $amount *= $rate;
 
                 return [
                     'pure_gold_weight' => $goldWeight,

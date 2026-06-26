@@ -11,7 +11,7 @@ class BusinessDictionary
 
     public const ENUMS = [
         'business_type' => ['sale', 'recycle', 'income', 'operating_expense'],
-        'payment_account' => ['cash', 'online', 'pure_gold_fund'],
+        'payment_account' => ['cash', 'online', 'mixed', 'pure_gold_fund'],
         'online_method' => ['bank', 'wechat', 'alipay'],
         'stock_bucket' => ['sale_stock', 'scrap_stock'],
         'product_type' => ['pure_gold', 'pure_silver', 'gold_wrapped'],
@@ -59,6 +59,10 @@ class BusinessDictionary
             'label.copper_weight' => '铜重',
             'label.pieces' => '件数',
             'label.amount' => '金额',
+            'label.cash_amount' => '现金金额',
+            'label.online_amount' => '线上金额',
+            'label.total_amount' => '合计金额',
+            'label.recycle_price_rate' => '回收比例',
             'label.date' => '日期',
             'label.remark' => '备注',
             'label.weight' => '重量',
@@ -96,6 +100,7 @@ class BusinessDictionary
             'business_type.operating_expense' => '店铺成本支出',
             'payment_account.cash' => '现金',
             'payment_account.online' => '线上',
+            'payment_account.mixed' => '现金+线上',
             'payment_account.pure_gold_fund' => '纯金回收资金',
             'online_method.bank' => '银行',
             'online_method.wechat' => '微信',
@@ -138,10 +143,10 @@ class BusinessDictionary
 
     public function translations(string $language = self::DEFAULT_LANGUAGE): array
     {
-        $fallback = Translation::query()
+        $fallback = array_replace(self::defaults(), Translation::query()
             ->where('language_code', self::DEFAULT_LANGUAGE)
             ->pluck('translation_value', 'translation_key')
-            ->all();
+            ->all());
 
         if ($language === self::DEFAULT_LANGUAGE) {
             return $fallback;

@@ -1,14 +1,15 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, CreditCard, Delete, Edit, Money, Plus, Refresh, User, Wallet } from '@element-plus/icons-vue'
+import { Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, User, Wallet } from '@element-plus/icons-vue'
 import { api, formatMoney } from './api'
 
 const token = ref(localStorage.getItem('admin_token') || '')
 const adminUser = ref(JSON.parse(localStorage.getItem('admin_user') || 'null'))
-const loginForm = reactive({ email: 'admin@finance.local', password: 'password' })
+const loginForm = reactive({ email: '', password: '' })
 const loading = ref(false)
 const activeMenu = ref('dashboard')
+const mobileMenu = ref(false)
 const month = ref(today().slice(0, 7))
 const stats = ref(null)
 const transactions = ref([])
@@ -50,13 +51,52 @@ const isRecycle = computed(() => form.business_type === 'recycle')
 const isSale = computed(() => form.business_type === 'sale')
 const isStockBusiness = computed(() => ['sale', 'recycle'].includes(form.business_type))
 const isGoldWrapped = computed(() => form.product_type === 'gold_wrapped')
+const isMixedPayment = computed(() => form.payment_account === 'mixed')
+const mixedTotal = computed(() => number(form.cash_amount) + number(form.online_amount))
+const paymentOptions = computed(() => {
+  const options = [
+    { label: '现金', value: 'cash' },
+    { label: '线上', value: 'online' },
+    { label: '现金+线上', value: 'mixed' },
+  ]
+  if (['income', 'recycle'].includes(form.business_type)) {
+    options.push({ label: '纯金回收资金', value: 'pure_gold_fund' })
+  }
+  return options
+})
+const stockOverview = computed(() => {
+  const sale = stats.value?.stock?.sale_stock?.summary || {}
+  const scrap = stats.value?.stock?.scrap_stock?.summary || {}
+  return [
+    {
+      label: '店内黄金',
+      value: number(sale.pure_gold_weight) + number(sale.wrapped_gold_weight),
+      detail: `纯金 ${formatWeight(sale.pure_gold_weight)}g / 金包 ${formatWeight(sale.wrapped_gold_weight)}g`,
+    },
+    {
+      label: '回收黄金',
+      value: number(scrap.pure_gold_weight) + number(scrap.wrapped_gold_weight),
+      detail: `纯金 ${formatWeight(scrap.pure_gold_weight)}g / 金包 ${formatWeight(scrap.wrapped_gold_weight)}g`,
+    },
+    {
+      label: '店内白银',
+      value: number(sale.silver_weight),
+      detail: '销售库存银重',
+    },
+    {
+      label: '回收白银',
+      value: number(scrap.silver_weight),
+      detail: '旧料库银重',
+    },
+  ]
+})
 const recycleAmount = computed(() => itemRows.value.reduce((sum, item) => {
   if (form.product_type === 'pure_gold') return sum + number(item.pure_gold_weight) * number(item.gold_unit_price)
   if (form.product_type === 'gold_wrapped') {
     return sum + number(item.wrapped_gold_weight) * number(item.gold_unit_price) + number(item.material_weight) * number(item.silver_unit_price)
   }
   return sum + number(item.material_weight) * number(item.silver_unit_price)
-}, 0))
+}, 0) * (number(form.recycle_price_rate || 100) / 100))
 
 const openingGroups = computed(() => [
   {
@@ -108,12 +148,19 @@ function number(value) {
   return Number(value || 0)
 }
 
+function formatWeight(value) {
+  return number(value).toFixed(3)
+}
+
 function defaultForm() {
   return {
     business_type: 'sale',
     payment_account: 'cash',
     online_method: '',
     amount: '',
+    cash_amount: '',
+    online_amount: '',
+    recycle_price_rate: 100,
     product_type: 'pure_gold',
     wrap_material: 'silver',
     pure_gold_weight: '',
@@ -238,6 +285,11 @@ async function refresh() {
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('users')) tasks.push(loadUsers())
   await Promise.all(tasks)
+}
+
+function selectMenu(key) {
+  activeMenu.value = key
+  mobileMenu.value = false
 }
 
 async function changePage(page) {
@@ -374,6 +426,25 @@ function openCreateRecycle(productType) {
   transactionDialog.value = true
 }
 
+function handleBusinessTypeChange(type) {
+  if (!['income', 'recycle'].includes(type) && form.payment_account === 'pure_gold_fund') {
+    form.payment_account = 'cash'
+  }
+  if (type === 'recycle') form.payment_account = 'pure_gold_fund'
+}
+
+function handlePaymentChange(account) {
+  if (account === 'online' || account === 'mixed') {
+    form.online_method = form.online_method || 'bank'
+  } else {
+    form.online_method = ''
+  }
+  if (account !== 'mixed') {
+    form.cash_amount = ''
+    form.online_amount = ''
+  }
+}
+
 function openEdit(row) {
   Object.assign(form, defaultForm(), row, {
     transaction_date: String(row.transaction_date).slice(0, 10),
@@ -395,7 +466,13 @@ function removeItem(index) {
 
 function buildPayload() {
   const payload = { ...form }
-  if (payload.payment_account !== 'online') payload.online_method = ''
+  if (payload.payment_account !== 'online' && payload.payment_account !== 'mixed') payload.online_method = ''
+  if (payload.payment_account === 'mixed') {
+    payload.amount = mixedTotal.value
+  } else {
+    payload.cash_amount = ''
+    payload.online_amount = ''
+  }
   if (!isStockBusiness.value) {
     payload.product_type = ''
     payload.wrap_material = ''
@@ -405,6 +482,7 @@ function buildPayload() {
     payload.amount = recycleAmount.value
   } else {
     payload.item_weights = []
+    payload.recycle_price_rate = 100
   }
   if (payload.business_type !== 'operating_expense') payload.expense_category = ''
   if (payload.product_type !== 'gold_wrapped') payload.wrap_material = ''
@@ -442,6 +520,10 @@ function productName(item) {
 }
 
 function accountName(item) {
+  if (item.payment_account === 'mixed') {
+    const onlineLabel = item.online_method_label?.label || item.online_method || '线上'
+    return `现金 ¥${formatMoney(item.cash_amount)} / ${onlineLabel} ¥${formatMoney(item.online_amount)}`
+  }
   const base = item.payment_account_label?.label || item.payment_account
   return item.online_method_label ? `${base} / ${item.online_method_label.label}` : base
 }
@@ -479,10 +561,10 @@ onMounted(() => {
     </main>
 
     <el-container v-else class="admin-shell">
-      <el-aside width="220px">
+      <el-aside width="220px" class="desktop-sidebar">
         <div class="brand">金银账本</div>
         <el-menu v-model:default-active="activeMenu" background-color="#101827" text-color="#c8d3e6" active-text-color="#fff">
-          <el-menu-item v-for="item in visibleMenus" :key="item.key" :index="item.key" @click="activeMenu = item.key">
+          <el-menu-item v-for="item in visibleMenus" :key="item.key" :index="item.key" @click="selectMenu(item.key)">
             <el-icon><component :is="item.icon" /></el-icon>{{ item.label }}
           </el-menu-item>
         </el-menu>
@@ -498,9 +580,12 @@ onMounted(() => {
 
       <el-container>
         <el-header>
-          <div>
-            <h2>{{ visibleMenus.find((item) => item.key === activeMenu)?.label || '后台' }}</h2>
-            <span>{{ month }}</span>
+          <div class="header-title">
+            <el-button class="mobile-menu-button" :icon="MenuIcon" circle @click="mobileMenu = true" />
+            <div>
+              <h2>{{ visibleMenus.find((item) => item.key === activeMenu)?.label || '后台' }}</h2>
+              <span>{{ month }}</span>
+            </div>
           </div>
           <div class="header-actions">
             <el-date-picker v-model="month" type="month" value-format="YYYY-MM" @change="refresh" />
@@ -510,21 +595,34 @@ onMounted(() => {
 
         <el-main v-if="activeMenu === 'dashboard' && stats">
           <el-row :gutter="16">
-            <el-col :span="6"><el-card shadow="hover" @click="openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card shadow="hover" @click="openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card shadow="hover" @click="openAccount('online')"><el-statistic title="线上" :value="stats.online.total" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card shadow="hover" @click="openAccount('pure_gold_fund')"><el-statistic title="纯金回收资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('online')"><el-statistic title="线上" :value="stats.online.total" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('pure_gold_fund')"><el-statistic title="纯金回收资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
           </el-row>
 
           <el-row :gutter="16" class="section">
-            <el-col :span="6"><el-card><el-statistic title="本月销售" :value="stats.monthly.sales" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card><el-statistic title="本月收入" :value="stats.monthly.income" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card><el-statistic title="本月回收" :value="stats.monthly.recycle" prefix="¥" /></el-card></el-col>
-            <el-col :span="6"><el-card><el-statistic title="本月支出" :value="stats.monthly.operating_expenses" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月销售" :value="stats.monthly.sales" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月收入" :value="stats.monthly.income" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月回收" :value="stats.monthly.recycle" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月支出" :value="stats.monthly.operating_expenses" prefix="¥" /></el-card></el-col>
           </el-row>
 
+          <el-card class="section">
+            <template #header>库存克重概览</template>
+            <el-row :gutter="16">
+              <el-col v-for="item in stockOverview" :key="item.label" :xs="24" :sm="12" :lg="6">
+                <div class="stock-metric">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ formatWeight(item.value) }}g</strong>
+                  <small>{{ item.detail }}</small>
+                </div>
+              </el-col>
+            </el-row>
+          </el-card>
+
           <el-row :gutter="16" class="section">
-            <el-col :span="12">
+            <el-col :xs="24" :lg="12">
               <el-card>
                 <template #header>旧料回收成本</template>
                 <el-descriptions :column="1" border>
@@ -533,7 +631,7 @@ onMounted(() => {
                 </el-descriptions>
               </el-card>
             </el-col>
-            <el-col :span="12">
+            <el-col :xs="24" :lg="12">
               <el-card>
                 <template #header>今日参考价</template>
                 <el-form :inline="true" :model="recyclePrice">
@@ -563,7 +661,7 @@ onMounted(() => {
             </template>
             <el-form :inline="true">
               <el-form-item label="业务"><el-select v-model="filters.business_type" clearable @change="applyFilters"><el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option label="支出" value="operating_expense" /></el-select></el-form-item>
-              <el-form-item label="账户"><el-select v-model="filters.payment_account" clearable @change="applyFilters"><el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="纯金回收资金" value="pure_gold_fund" /></el-select></el-form-item>
+              <el-form-item label="账户"><el-select v-model="filters.payment_account" clearable @change="applyFilters"><el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="现金+线上" value="mixed" /><el-option label="纯金回收资金" value="pure_gold_fund" /></el-select></el-form-item>
               <el-form-item label="开始日期"><el-date-picker v-model="filters.date_from" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
               <el-form-item label="结束日期"><el-date-picker v-model="filters.date_to" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
               <el-form-item>
@@ -571,22 +669,24 @@ onMounted(() => {
                 <el-button @click="clearFilters">清空</el-button>
               </el-form-item>
             </el-form>
-            <el-table :data="transactions" stripe border>
-              <el-table-column prop="transaction_date" label="日期" width="120" />
-              <el-table-column label="业务" width="110"><template #default="{ row }">{{ row.business_type_label?.label }}</template></el-table-column>
-              <el-table-column label="商品/分类" width="130"><template #default="{ row }">{{ row.expense_category_label?.label || productName(row) }}</template></el-table-column>
-              <el-table-column label="金额" width="130"><template #default="{ row }">¥{{ formatMoney(row.amount) }}</template></el-table-column>
-              <el-table-column label="账户" width="160"><template #default="{ row }">{{ accountName(row) }}</template></el-table-column>
-              <el-table-column label="重量"><template #default="{ row }">{{ weightText(row) }}</template></el-table-column>
-              <el-table-column prop="remark" label="备注" />
-              <el-table-column label="操作" width="130" fixed="right">
-                <template #default="{ row }">
-                  <el-button v-if="canEditTransactions" :icon="Edit" text @click="openEdit(row)" />
-                  <el-button v-if="canEditTransactions" :icon="Delete" text type="danger" @click="deleteTransaction(row)" />
-                  <span v-if="!canEditTransactions" class="muted">仅录入查询</span>
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="table-scroll">
+              <el-table :data="transactions" stripe border>
+                <el-table-column prop="transaction_date" label="日期" width="120" />
+                <el-table-column label="业务" width="110"><template #default="{ row }">{{ row.business_type_label?.label }}</template></el-table-column>
+                <el-table-column label="商品/分类" width="130"><template #default="{ row }">{{ row.expense_category_label?.label || productName(row) }}</template></el-table-column>
+                <el-table-column label="金额" width="130"><template #default="{ row }">¥{{ formatMoney(row.amount) }}</template></el-table-column>
+                <el-table-column label="账户" width="160"><template #default="{ row }">{{ accountName(row) }}</template></el-table-column>
+                <el-table-column label="重量" min-width="170"><template #default="{ row }">{{ weightText(row) }}</template></el-table-column>
+                <el-table-column prop="remark" label="备注" min-width="160" />
+                <el-table-column label="操作" width="130" fixed="right">
+                  <template #default="{ row }">
+                    <el-button v-if="canEditTransactions" :icon="Edit" text @click="openEdit(row)" />
+                    <el-button v-if="canEditTransactions" :icon="Delete" text type="danger" @click="deleteTransaction(row)" />
+                    <span v-if="!canEditTransactions" class="muted">仅录入查询</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
             <el-pagination
               class="section pagination-bar"
               background
@@ -611,7 +711,7 @@ onMounted(() => {
               </div>
             </template>
             <el-row :gutter="16">
-              <el-col v-for="[key, label, unit] in group.fields" :key="key" :span="8">
+              <el-col v-for="[key, label, unit] in group.fields" :key="key" :xs="24" :sm="12" :lg="8">
                 <el-form-item :label="label">
                   <el-input-number v-model="opening[key]" :precision="unit === '件' ? 0 : 3" :min="-999999999" />
                   <span class="field-unit">{{ unit }}</span>
@@ -632,35 +732,37 @@ onMounted(() => {
                 <el-button type="primary" :icon="Plus" @click="openCreateUser">新增用户</el-button>
               </div>
             </template>
-            <el-table :data="users" stripe border>
-              <el-table-column prop="name" label="姓名" width="140" />
-              <el-table-column prop="email" label="账号邮箱" />
-              <el-table-column label="角色" width="130">
-                <template #default="{ row }">
-                  <el-tag :type="row.is_super_admin ? 'danger' : 'info'">{{ row.is_super_admin ? '超级管理员' : '普通用户' }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="100">
-                <template #default="{ row }">
-                  <el-tag :type="row.enabled ? 'success' : 'warning'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="权限">
-                <template #default="{ row }">
-                  <el-space wrap>
-                    <el-tag v-for="permission in row.permissions" :key="permission">{{ permissionOptions[permission] || permission }}</el-tag>
-                  </el-space>
-                </template>
-              </el-table-column>
-              <el-table-column prop="last_login_at" label="最后登录" width="180" />
-              <el-table-column label="操作" width="220" fixed="right">
-                <template #default="{ row }">
-                  <el-button :disabled="row.is_super_admin" :icon="Edit" text @click="openEditUser(row)" />
-                  <el-button :disabled="row.is_super_admin" text @click="openResetPassword(row)">重置密码</el-button>
-                  <el-button :disabled="row.is_super_admin || !row.enabled" :icon="Delete" text type="danger" @click="disableUser(row)" />
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="table-scroll">
+              <el-table :data="users" stripe border>
+                <el-table-column prop="name" label="姓名" width="140" />
+                <el-table-column prop="email" label="账号邮箱" min-width="180" />
+                <el-table-column label="角色" width="130">
+                  <template #default="{ row }">
+                    <el-tag :type="row.is_super_admin ? 'danger' : 'info'">{{ row.is_super_admin ? '超级管理员' : '普通用户' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100">
+                  <template #default="{ row }">
+                    <el-tag :type="row.enabled ? 'success' : 'warning'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="权限" min-width="220">
+                  <template #default="{ row }">
+                    <el-space wrap>
+                      <el-tag v-for="permission in row.permissions" :key="permission">{{ permissionOptions[permission] || permission }}</el-tag>
+                    </el-space>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="last_login_at" label="最后登录" width="180" />
+                <el-table-column label="操作" width="220" fixed="right">
+                  <template #default="{ row }">
+                    <el-button :disabled="row.is_super_admin" :icon="Edit" text @click="openEditUser(row)" />
+                    <el-button :disabled="row.is_super_admin" text @click="openResetPassword(row)">重置密码</el-button>
+                    <el-button :disabled="row.is_super_admin || !row.enabled" :icon="Delete" text type="danger" @click="disableUser(row)" />
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
             <el-pagination
               class="section pagination-bar"
               background
@@ -677,52 +779,75 @@ onMounted(() => {
       </el-container>
     </el-container>
 
-    <el-drawer v-model="accountDrawer" :title="accountTitle(selectedAccount)" size="50%">
+    <el-drawer v-model="mobileMenu" title="金银账本" direction="ltr" size="82%" class="mobile-drawer">
+      <el-menu v-model:default-active="activeMenu" background-color="#101827" text-color="#c8d3e6" active-text-color="#fff">
+        <el-menu-item v-for="item in visibleMenus" :key="item.key" :index="item.key" @click="selectMenu(item.key)">
+          <el-icon><component :is="item.icon" /></el-icon>{{ item.label }}
+        </el-menu-item>
+      </el-menu>
+      <div class="current-user">
+        <strong>{{ adminUser?.name || '未命名用户' }}</strong>
+        <span>{{ adminUser?.email }}</span>
+        <el-tag size="small" :type="adminUser?.is_super_admin ? 'danger' : 'info'">
+          {{ adminUser?.is_super_admin ? '超级管理员' : '普通用户' }}
+        </el-tag>
+      </div>
+      <el-button plain class="logout" @click="logout">退出</el-button>
+    </el-drawer>
+
+    <el-drawer v-model="accountDrawer" :title="accountTitle(selectedAccount)" size="min(92vw, 760px)">
       <el-radio-group v-model="accountRange" @change="loadAccountDetail">
         <el-radio-button label="month">当前月份</el-radio-button>
         <el-radio-button label="all">全部历史</el-radio-button>
       </el-radio-group>
-      <el-table :data="accountDetail.entries" class="section" border>
-        <el-table-column prop="transaction_date" label="日期" width="110" />
-        <el-table-column prop="business_type" label="业务" width="120" />
-        <el-table-column prop="remark" label="备注" />
-        <el-table-column label="变化" width="120"><template #default="{ row }">¥{{ formatMoney(row.signed_amount) }}</template></el-table-column>
-        <el-table-column label="余额" width="120"><template #default="{ row }">¥{{ formatMoney(row.balance_after) }}</template></el-table-column>
-      </el-table>
+      <div class="table-scroll section">
+        <el-table :data="accountDetail.entries" border>
+          <el-table-column prop="transaction_date" label="日期" width="110" />
+          <el-table-column prop="business_type" label="业务" width="120" />
+          <el-table-column prop="remark" label="备注" min-width="160" />
+          <el-table-column label="变化" width="120"><template #default="{ row }">¥{{ formatMoney(row.signed_amount) }}</template></el-table-column>
+          <el-table-column label="余额" width="120"><template #default="{ row }">¥{{ formatMoney(row.balance_after) }}</template></el-table-column>
+        </el-table>
+      </div>
     </el-drawer>
 
-    <el-dialog v-model="transactionDialog" title="流水录入" width="760px">
-      <el-form :model="form" label-width="110px">
+    <el-dialog v-model="transactionDialog" title="流水录入" width="min(94vw, 760px)" class="responsive-dialog">
+      <el-form :model="form" label-width="110px" class="responsive-form">
         <el-row :gutter="12">
-          <el-col :span="8">
+          <el-col :xs="24" :md="8">
             <el-form-item label="业务类型">
-              <el-select v-model="form.business_type">
+              <el-select v-model="form.business_type" @change="handleBusinessTypeChange">
                 <el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option label="支出" value="operating_expense" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :xs="24" :md="8">
             <el-form-item label="账户">
-              <el-select v-model="form.payment_account">
-                <el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="纯金回收资金" value="pure_gold_fund" />
+              <el-select v-model="form.payment_account" @change="handlePaymentChange">
+                <el-option v-for="option in paymentOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8" v-if="form.payment_account === 'online'">
+          <el-col :xs="24" :md="8" v-if="form.payment_account === 'online' || form.payment_account === 'mixed'">
             <el-form-item label="线上方式">
               <el-select v-model="form.online_method"><el-option label="银行" value="bank" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select>
             </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="12">
-          <el-col :span="8"><el-form-item label="日期"><el-date-picker v-model="form.transaction_date" type="date" value-format="YYYY-MM-DD" @change="loadRecyclePrice" /></el-form-item></el-col>
-          <el-col :span="8" v-if="!isRecycle"><el-form-item label="金额"><el-input-number v-model="form.amount" :min="0" :precision="2" /></el-form-item></el-col>
-          <el-col :span="8" v-if="form.business_type === 'operating_expense'"><el-form-item label="支出分类"><el-select v-model="form.expense_category"><el-option label="房租" value="rent" /><el-option label="电费" value="electricity" /><el-option label="水费" value="water" /><el-option label="工资" value="salary" /><el-option label="耗材" value="supplies" /><el-option label="其他" value="other" /></el-select></el-form-item></el-col>
+          <el-col :xs="24" :md="8"><el-form-item label="日期"><el-date-picker v-model="form.transaction_date" type="date" value-format="YYYY-MM-DD" @change="loadRecyclePrice" /></el-form-item></el-col>
+          <template v-if="isMixedPayment">
+            <el-col :xs="24" :md="8"><el-form-item label="现金金额"><el-input-number v-model="form.cash_amount" :min="0" :precision="2" /></el-form-item></el-col>
+            <el-col :xs="24" :md="8"><el-form-item label="线上金额"><el-input-number v-model="form.online_amount" :min="0" :precision="2" /></el-form-item></el-col>
+            <el-col :xs="24" :md="8"><el-form-item label="合计金额"><el-input-number :model-value="mixedTotal" :min="0" :precision="2" disabled /></el-form-item></el-col>
+          </template>
+          <el-col :xs="24" :md="8" v-else-if="!isRecycle"><el-form-item label="金额"><el-input-number v-model="form.amount" :min="0" :precision="2" /></el-form-item></el-col>
+          <el-col :xs="24" :md="8" v-if="form.business_type === 'operating_expense'"><el-form-item label="支出分类"><el-select v-model="form.expense_category"><el-option label="房租" value="rent" /><el-option label="电费" value="electricity" /><el-option label="水费" value="water" /><el-option label="工资" value="salary" /><el-option label="耗材" value="supplies" /><el-option label="其他" value="other" /></el-select></el-form-item></el-col>
         </el-row>
 
         <template v-if="isStockBusiness">
           <el-row :gutter="12">
-            <el-col :span="8">
+            <el-col :xs="24" :md="8">
               <el-form-item label="商品">
                 <el-select v-model="form.product_type">
                   <el-option label="纯金" value="pure_gold" /><el-option v-if="isSale" label="纯银" value="pure_silver" /><el-option label="金包银" value="gold_wrapped" />
@@ -732,22 +857,47 @@ onMounted(() => {
           </el-row>
           <template v-if="!isRecycle">
             <el-row :gutter="12">
-              <el-col :span="8" v-if="form.product_type === 'pure_gold'"><el-form-item label="纯金克重"><el-input-number v-model="form.pure_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
-              <el-col :span="8" v-if="form.product_type === 'pure_silver'"><el-form-item label="银重"><el-input-number v-model="form.material_weight" :min="0" :precision="3" /></el-form-item></el-col>
-              <el-col :span="8" v-if="isGoldWrapped"><el-form-item label="金重"><el-input-number v-model="form.wrapped_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
-              <el-col :span="8" v-if="isGoldWrapped"><el-form-item label="银重"><el-input-number v-model="form.material_weight" :min="0" :precision="3" /></el-form-item></el-col>
-              <el-col :span="8"><el-form-item label="件数"><el-input-number v-model="form.material_pieces" :min="0" /></el-form-item></el-col>
+              <el-col :xs="24" :md="8" v-if="form.product_type === 'pure_gold'"><el-form-item label="纯金克重"><el-input-number v-model="form.pure_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
+              <el-col :xs="24" :md="8" v-if="form.product_type === 'pure_silver'"><el-form-item label="银重"><el-input-number v-model="form.material_weight" :min="0" :precision="3" /></el-form-item></el-col>
+              <el-col :xs="24" :md="8" v-if="isGoldWrapped"><el-form-item label="金重"><el-input-number v-model="form.wrapped_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
+              <el-col :xs="24" :md="8" v-if="isGoldWrapped"><el-form-item label="银重"><el-input-number v-model="form.material_weight" :min="0" :precision="3" /></el-form-item></el-col>
+              <el-col :xs="24" :md="8"><el-form-item label="件数"><el-input-number v-model="form.material_pieces" :min="0" /></el-form-item></el-col>
             </el-row>
           </template>
           <template v-else>
-            <el-alert title="参考价只作提示，实际每克回收价按每件手动填写。" type="info" :closable="false" />
-            <div v-for="(item, index) in itemRows" :key="index" class="item-row">
-              <el-input-number v-if="form.product_type === 'pure_gold'" v-model="item.pure_gold_weight" :min="0" :precision="3" placeholder="纯金g" />
-              <el-input-number v-if="isGoldWrapped" v-model="item.wrapped_gold_weight" :min="0" :precision="3" placeholder="金g" />
-              <el-input-number v-if="isGoldWrapped" v-model="item.material_weight" :min="0" :precision="3" placeholder="银g" />
-              <el-input-number v-model="item.gold_unit_price" :min="0" :precision="2" :placeholder="`金价 参考${recyclePrice.reference_gold_price || 0}`" />
-              <el-input-number v-if="isGoldWrapped" v-model="item.silver_unit_price" :min="0" :precision="2" :placeholder="`银价 参考${recyclePrice.reference_silver_price || 0}`" />
-              <el-button :icon="Delete" @click="removeItem(index)" />
+            <el-alert class="recycle-tip" title="参考价仅作提示。成色不足时填写回收比例，例如 90 或 95，系统按单克价的对应百分比计算。" type="info" :closable="false" />
+            <div v-for="(item, index) in itemRows" :key="index" class="item-row recycle-item-row">
+              <div class="inline-field">
+                <span>回收比例</span>
+                <el-input-number v-model="form.recycle_price_rate" :min="0.01" :max="100" :precision="2" />
+                <em>%</em>
+              </div>
+              <div v-if="form.product_type === 'pure_gold'" class="inline-field">
+                <span>纯金克重</span>
+                <el-input-number v-model="item.pure_gold_weight" :min="0" :precision="3" />
+                <em>g</em>
+              </div>
+              <div v-if="isGoldWrapped" class="inline-field">
+                <span>金重</span>
+                <el-input-number v-model="item.wrapped_gold_weight" :min="0" :precision="3" />
+                <em>g</em>
+              </div>
+              <div v-if="isGoldWrapped" class="inline-field">
+                <span>银重</span>
+                <el-input-number v-model="item.material_weight" :min="0" :precision="3" />
+                <em>g</em>
+              </div>
+              <div class="inline-field">
+                <span>金价</span>
+                <el-input-number v-model="item.gold_unit_price" :min="0" :precision="2" />
+                <em>参考 {{ formatMoney(recyclePrice.reference_gold_price || 0) }}</em>
+              </div>
+              <div v-if="isGoldWrapped" class="inline-field">
+                <span>银价</span>
+                <el-input-number v-model="item.silver_unit_price" :min="0" :precision="2" />
+                <em>参考 {{ formatMoney(recyclePrice.reference_silver_price || 0) }}</em>
+              </div>
+              <el-button class="item-delete" :icon="Delete" @click="removeItem(index)" />
             </div>
             <el-button :icon="Plus" @click="addItem">添加一件</el-button>
             <el-statistic class="section" title="回收合计" :value="recycleAmount" prefix="¥" />
@@ -762,8 +912,8 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="userDialog" :title="editingUserId ? '编辑用户' : '新增用户'" width="620px">
-      <el-form :model="userForm" label-width="100px">
+    <el-dialog v-model="userDialog" :title="editingUserId ? '编辑用户' : '新增用户'" width="min(94vw, 620px)" class="responsive-dialog">
+      <el-form :model="userForm" label-width="100px" class="responsive-form">
         <el-form-item label="姓名"><el-input v-model="userForm.name" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="userForm.email" /></el-form-item>
         <el-form-item v-if="!editingUserId" label="初始密码"><el-input v-model="userForm.password" type="password" show-password /></el-form-item>
@@ -780,8 +930,8 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="passwordDialog" title="重置密码" width="420px">
-      <el-form :model="passwordForm" label-width="90px">
+    <el-dialog v-model="passwordDialog" title="重置密码" width="min(94vw, 420px)" class="responsive-dialog">
+      <el-form :model="passwordForm" label-width="90px" class="responsive-form">
         <el-form-item label="新密码"><el-input v-model="passwordForm.password" type="password" show-password /></el-form-item>
       </el-form>
       <template #footer>
