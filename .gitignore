@@ -3,6 +3,7 @@ backups/
 release/
 github access token.txt
 .git-credential-github-token
+.superpowers/
 
 # Backend
 financeBackend/.env
