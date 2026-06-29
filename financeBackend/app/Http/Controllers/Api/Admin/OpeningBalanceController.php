@@ -36,5 +36,4 @@ class OpeningBalanceController extends Controller
             '*' => ['nullable', 'numeric', 'min:-999999999', 'max:999999999'],
         ]), $store->id));
     }
-
 }

@@ -291,13 +291,13 @@ class TransactionController extends Controller
                 'wrap_material' => null,
                 'pure_gold_weight' => 0,
                 'wrapped_gold_weight' => 0,
-            'material_weight' => 0,
-            'material_pieces' => 0,
-            'item_weights' => null,
-            'gold_unit_price' => null,
-            'silver_unit_price' => null,
-            'recycle_price_rate' => 100,
-        ]));
+                'material_weight' => 0,
+                'material_pieces' => 0,
+                'item_weights' => null,
+                'gold_unit_price' => null,
+                'silver_unit_price' => null,
+                'recycle_price_rate' => 100,
+            ]));
         }
 
         $data['stock_bucket'] = $data['business_type'] === 'sale' ? 'sale_stock' : 'scrap_stock';

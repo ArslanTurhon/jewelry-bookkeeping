@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers\Api\Admin;
 
-use App\Models\AdminUser;
 use App\Http\Controllers\Controller;
+use App\Models\AdminUser;
 use App\Support\AdminAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;

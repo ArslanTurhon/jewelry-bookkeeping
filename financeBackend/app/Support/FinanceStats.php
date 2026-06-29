@@ -3,8 +3,8 @@
 namespace App\Support;
 
 use App\Models\OpeningBalance;
-use App\Models\Transaction;
 use App\Models\Store;
+use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
 
 class FinanceStats
