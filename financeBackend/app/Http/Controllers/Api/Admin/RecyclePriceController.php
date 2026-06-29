@@ -6,11 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Models\RecyclePrice;
 use App\Support\AdminAccess;
+use App\Support\StoreContext;
 use Illuminate\Http\Request;
 
 class RecyclePriceController extends Controller
 {
-    public function show(Request $request)
+    public function show(Request $request, StoreContext $stores)
     {
         $admin = AdminAccess::require($request, 'recycle_price');
         if (! $admin instanceof AdminUser) {
@@ -18,15 +19,16 @@ class RecyclePriceController extends Controller
         }
 
         $date = $request->query('date', now()->toDateString());
+        $store = $stores->writableStore($admin, $request);
         $price = RecyclePrice::query()->firstOrCreate(
-            ['price_date' => $date],
+            ['store_id' => $store->id, 'price_date' => $date],
             ['reference_gold_price' => 0, 'reference_silver_price' => 0],
         );
 
         return response()->json($price);
     }
 
-    public function store(Request $request)
+    public function store(Request $request, StoreContext $stores)
     {
         $admin = AdminAccess::require($request, 'recycle_price');
         if (! $admin instanceof AdminUser) {
@@ -39,8 +41,10 @@ class RecyclePriceController extends Controller
             'reference_silver_price' => ['nullable', 'numeric', 'min:0', 'max:999999999.99'],
         ]);
 
+        $store = $stores->writableStore($admin, $request);
+
         return response()->json(RecyclePrice::query()->updateOrCreate(
-            ['price_date' => $data['price_date']],
+            ['store_id' => $store->id, 'price_date' => $data['price_date']],
             [
                 'reference_gold_price' => $data['reference_gold_price'] ?? 0,
                 'reference_silver_price' => $data['reference_silver_price'] ?? 0,

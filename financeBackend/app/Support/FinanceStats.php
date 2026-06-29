@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\OpeningBalance;
 use App\Models\Transaction;
+use App\Models\Store;
 use Illuminate\Database\Eloquent\Builder;
 
 class FinanceStats
@@ -39,30 +40,32 @@ class FinanceStats
         'scrap_stock.gold_wrapped_copper.pieces' => 0,
     ];
 
-    public function current(?int $userId = null, ?string $month = null): array
+    public function current(?int $userId = null, ?string $month = null, ?int $storeId = null): array
     {
         $records = Transaction::query()
             ->when($userId, fn (Builder $query) => $query->where('user_id', $userId))
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->get();
 
         $monthly = Transaction::query()
             ->when($userId, fn (Builder $query) => $query->where('user_id', $userId))
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->when($month, fn (Builder $query) => $query->where('transaction_date', 'like', $month.'%'))
             ->get();
 
-        $cash = $this->opening('cash');
-        $pureGoldFund = $this->opening('pure_gold_fund');
+        $cash = $this->opening('cash', $storeId);
+        $pureGoldFund = $this->opening('pure_gold_fund', $storeId);
         $online = [
-            'bank' => $this->opening('online_bank'),
-            'wechat' => $this->opening('online_wechat'),
-            'alipay' => $this->opening('online_alipay'),
+            'bank' => $this->opening('online_bank', $storeId),
+            'wechat' => $this->opening('online_wechat', $storeId),
+            'alipay' => $this->opening('online_alipay', $storeId),
         ];
 
         $stock = [
             'sale_stock' => $this->emptyBucket('sale_stock'),
             'scrap_stock' => $this->emptyBucket('scrap_stock'),
         ];
-        $this->applyOpeningStock($stock);
+        $this->applyOpeningStock($stock, $storeId);
         $recycleCost = $this->emptyRecycleCost();
 
         foreach ($records as $record) {
@@ -120,15 +123,16 @@ class FinanceStats
         ];
     }
 
-    public function accountDetails(string $account, ?string $month = null, string $range = 'month'): array
+    public function accountDetails(string $account, ?string $month = null, string $range = 'month', ?int $storeId = null): array
     {
         $records = Transaction::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->orderBy('transaction_date')
             ->orderBy('id')
             ->get();
 
         $keys = $this->accountKeys($account);
-        $opening = collect($keys)->sum(fn (string $key) => $this->opening($key));
+        $opening = collect($keys)->sum(fn (string $key) => $this->opening($key, $storeId));
         $balance = $opening;
         $entries = [];
 
@@ -167,39 +171,42 @@ class FinanceStats
         ];
     }
 
-    public function openingBalances(): array
+    public function openingBalances(?int $storeId = null): array
     {
         return OpeningBalance::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->pluck('value', 'key')
             ->map(fn ($value) => (float) $value)
             ->all() + self::BALANCE_KEYS + self::STOCK_KEYS;
     }
 
-    public function saveOpeningBalances(array $balances): array
+    public function saveOpeningBalances(array $balances, ?int $storeId = null): array
     {
+        $storeId ??= (int) Store::query()->where('is_default', true)->value('id');
         foreach (self::BALANCE_KEYS + self::STOCK_KEYS as $key => $default) {
             OpeningBalance::query()->updateOrCreate(
-                ['scope' => 'store', 'key' => $key],
+                ['store_id' => $storeId, 'scope' => 'store', 'key' => $key],
                 ['value' => $balances[$key] ?? $default],
             );
         }
 
-        return $this->openingBalances();
+        return $this->openingBalances($storeId);
     }
 
-    private function opening(string $key): float
+    private function opening(string $key, ?int $storeId = null): float
     {
         return (float) (OpeningBalance::query()
             ->where('scope', 'store')
             ->where('key', $key)
-            ->value('value') ?? 0);
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->sum('value'));
     }
 
-    private function applyOpeningStock(array &$stock): void
+    private function applyOpeningStock(array &$stock, ?int $storeId = null): void
     {
         foreach (self::STOCK_KEYS as $key => $default) {
             [$bucket, $product, $field] = explode('.', $key);
-            $stock[$bucket]['products'][$product][$field] = $this->opening($key);
+            $stock[$bucket]['products'][$product][$field] = $this->opening($key, $storeId);
         }
     }
 

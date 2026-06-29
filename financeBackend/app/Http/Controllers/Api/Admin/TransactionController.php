@@ -10,13 +10,14 @@ use App\Models\User;
 use App\Support\AdminAccess;
 use App\Support\BusinessDictionary;
 use App\Support\FinanceStats;
+use App\Support\StoreContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class TransactionController extends Controller
 {
-    public function index(Request $request, BusinessDictionary $dictionary)
+    public function index(Request $request, BusinessDictionary $dictionary, StoreContext $stores)
     {
         $admin = AdminAccess::require($request);
         if (! $admin instanceof AdminUser) {
@@ -28,6 +29,7 @@ class TransactionController extends Controller
 
         $language = $this->language($request);
         $query = Transaction::query()->with('user')->latest('transaction_date')->latest('id');
+        $stores->scope($query, $admin, $request);
         $this->applyReadableScope($query, $admin);
         foreach (['business_type', 'payment_account', 'online_method', 'stock_bucket', 'product_type', 'wrap_material', 'expense_category'] as $field) {
             if ($request->filled($field)) {
@@ -53,7 +55,7 @@ class TransactionController extends Controller
         return response()->json($page);
     }
 
-    public function store(Request $request, BusinessDictionary $dictionary)
+    public function store(Request $request, BusinessDictionary $dictionary, StoreContext $stores)
     {
         $admin = AdminAccess::require($request);
         if (! $admin instanceof AdminUser) {
@@ -65,7 +67,10 @@ class TransactionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $transaction = Transaction::query()->create($this->normalize($data) + [
+        $store = $stores->writableStore($admin, $request);
+        $transaction = Transaction::query()->create($this->normalize($data, $store->id) + [
+            'store_id' => $store->id,
+            'recorded_by_admin_id' => $admin->id,
             'user_id' => $this->backofficeUser()->id,
         ]);
 
@@ -82,7 +87,7 @@ class TransactionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $transaction->update($this->normalize($this->validatedData($request)));
+        $transaction->update($this->normalize($this->validatedData($request), $transaction->store_id));
 
         return response()->json($this->present($transaction->fresh('user'), $dictionary, $this->language($request)));
     }
@@ -102,22 +107,26 @@ class TransactionController extends Controller
         return response()->json(['message' => 'deleted']);
     }
 
-    public function monthlyStats(Request $request, FinanceStats $stats)
+    public function monthlyStats(Request $request, FinanceStats $stats, StoreContext $stores)
     {
         $admin = AdminAccess::require($request, 'dashboard');
         if (! $admin instanceof AdminUser) {
             return $admin;
         }
 
-        return response()->json($stats->current(null, $request->string('month', now()->format('Y-m'))->toString()));
+        return response()->json($stats->current(
+            null,
+            $request->string('month', now()->format('Y-m'))->toString(),
+            $stores->readableStoreId($admin, $request),
+        ));
     }
 
-    public function currentStats(Request $request, FinanceStats $stats)
+    public function currentStats(Request $request, FinanceStats $stats, StoreContext $stores)
     {
-        return $this->monthlyStats($request, $stats);
+        return $this->monthlyStats($request, $stats, $stores);
     }
 
-    public function accountDetails(Request $request, FinanceStats $stats)
+    public function accountDetails(Request $request, FinanceStats $stats, StoreContext $stores)
     {
         $admin = AdminAccess::require($request, 'dashboard');
         if (! $admin instanceof AdminUser) {
@@ -134,6 +143,7 @@ class TransactionController extends Controller
             $data['account'],
             $data['month'] ?? now()->format('Y-m'),
             $data['range'] ?? 'month',
+            $stores->readableStoreId($admin, $request),
         ));
     }
 
@@ -265,9 +275,12 @@ class TransactionController extends Controller
         return $data;
     }
 
-    private function normalize(array $data): array
+    private function normalize(array $data, ?int $storeId = null): array
     {
-        $price = RecyclePrice::query()->whereDate('price_date', $data['transaction_date'])->first();
+        $price = RecyclePrice::query()
+            ->when($storeId, fn ($query) => $query->where('store_id', $storeId))
+            ->whereDate('price_date', $data['transaction_date'])
+            ->first();
         $data['reference_gold_price'] = $price?->reference_gold_price ?? 0;
         $data['reference_silver_price'] = $price?->reference_silver_price ?? 0;
 

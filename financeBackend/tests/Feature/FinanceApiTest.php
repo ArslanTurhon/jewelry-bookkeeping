@@ -426,4 +426,60 @@ class FinanceApiTest extends TestCase
         $this->assertSame(0, Transaction::query()->whereNull('store_id')->count());
         $this->assertSame(0, OpeningBalance::query()->whereNull('store_id')->count());
     }
+
+    public function test_staff_can_only_read_and_write_their_own_store(): void
+    {
+        $this->seed();
+        $first = Store::query()->where('is_default', true)->sole();
+        $second = Store::query()->create(['name' => '二店', 'enabled' => true]);
+        $staff = AdminUser::query()->create([
+            'store_id' => $first->id,
+            'name' => '一店员工',
+            'username' => 'first-staff',
+            'email' => 'first-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+        ]);
+        $staff->forceFill(['api_token' => 'first-store-token'])->save();
+        $ledgerUser = User::query()->create([
+            'openid' => 'store-isolation-user',
+            'name' => '测试',
+            'api_token' => 'store-isolation-user-token',
+        ]);
+
+        foreach ([[$first->id, '一店记录'], [$second->id, '二店记录']] as [$storeId, $remark]) {
+            Transaction::query()->create([
+                'store_id' => $storeId,
+                'user_id' => $ledgerUser->id,
+                'business_type' => 'sale',
+                'payment_account' => 'cash',
+                'amount' => 100,
+                'stock_bucket' => 'sale_stock',
+                'product_type' => 'pure_gold',
+                'pure_gold_weight' => 1,
+                'transaction_date' => '2026-06-29',
+                'remark' => $remark,
+            ]);
+        }
+
+        $this->withToken('first-store-token')
+            ->withHeader('X-Store-Id', (string) $second->id)
+            ->getJson('/api/admin/transactions')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.remark', '一店记录');
+
+        $created = $this->withToken('first-store-token')->postJson('/api/admin/transactions', [
+            'business_type' => 'sale',
+            'payment_account' => 'cash',
+            'amount' => 200,
+            'product_type' => 'pure_gold',
+            'pure_gold_weight' => 2,
+            'transaction_date' => '2026-06-29',
+        ])->assertCreated()->json();
+
+        $this->assertSame($first->id, $created['store_id']);
+        $this->assertSame($staff->id, $created['recorded_by_admin_id']);
+    }
 }

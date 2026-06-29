@@ -53,6 +53,7 @@ return new class extends Migration
         DB::table('transactions')->whereNull('store_id')->update(['store_id' => $storeId]);
         DB::table('opening_balances')->whereNull('store_id')->update(['store_id' => $storeId]);
         DB::table('recycle_prices')->whereNull('store_id')->update(['store_id' => $storeId]);
+        DB::table('admin_users')->where('is_super_admin', false)->whereNull('store_id')->update(['store_id' => $storeId]);
 
         DB::table('admin_users')->orderBy('id')->get()->each(function (object $user): void {
             $base = Str::of((string) $user->email)->before('@')->slug()->value() ?: 'user-'.$user->id;
