@@ -7,6 +7,7 @@ use App\Models\Category;
 use App\Models\Language;
 use App\Models\OpeningBalance;
 use App\Models\Translation;
+use App\Models\Store;
 use App\Support\BusinessDictionary;
 use App\Support\FinanceStats;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
@@ -19,6 +20,10 @@ class DatabaseSeeder extends Seeder
 
     public function run(): void
     {
+        $store = Store::query()->firstOrCreate(
+            ['is_default' => true],
+            ['name' => '总店', 'enabled' => true],
+        );
         $legacyCategories = [
             ['name' => '销售', 'type' => 'income', 'color' => '#16a34a'],
             ['name' => '收入', 'type' => 'income', 'color' => '#2563eb'],
@@ -37,6 +42,7 @@ class DatabaseSeeder extends Seeder
             ['email' => env('ADMIN_EMAIL', 'admin@finance.local')],
             [
                 'name' => '管理员',
+                'username' => env('ADMIN_USERNAME', 'owner'),
                 'password' => Hash::make(env('ADMIN_PASSWORD', 'password')),
                 'is_super_admin' => true,
                 'enabled' => true,
@@ -166,7 +172,7 @@ class DatabaseSeeder extends Seeder
 
         foreach (FinanceStats::BALANCE_KEYS + FinanceStats::STOCK_KEYS as $key => $value) {
             OpeningBalance::query()->updateOrCreate(
-                ['scope' => 'store', 'key' => $key],
+                ['store_id' => $store->id, 'scope' => 'store', 'key' => $key],
                 ['value' => $value],
             );
         }

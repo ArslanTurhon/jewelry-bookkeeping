@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AdminUser extends Authenticatable
 {
@@ -18,6 +19,7 @@ class AdminUser extends Authenticatable
 
     protected $fillable = [
         'name',
+        'username',
         'email',
         'password',
         'api_token',
@@ -25,6 +27,7 @@ class AdminUser extends Authenticatable
         'enabled',
         'permissions',
         'last_login_at',
+        'store_id',
     ];
 
     protected $hidden = ['password', 'api_token'];
@@ -48,5 +51,10 @@ class AdminUser extends Authenticatable
     public function visiblePermissions(): array
     {
         return $this->is_super_admin ? array_keys(self::PERMISSIONS) : ($this->permissions ?? []);
+    }
+
+    public function store(): BelongsTo
+    {
+        return $this->belongsTo(Store::class);
     }
 }

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class RecyclePrice extends Model
 {
     protected $fillable = [
+        'store_id',
         'price_date',
         'reference_gold_price',
         'reference_silver_price',

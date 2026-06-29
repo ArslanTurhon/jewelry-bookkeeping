@@ -4,6 +4,9 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Models\AdminUser;
+use App\Models\OpeningBalance;
+use App\Models\Store;
+use App\Models\Transaction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
@@ -408,5 +411,19 @@ class FinanceApiTest extends TestCase
         ])->assertStatus(422);
 
         $this->withToken($token)->deleteJson('/api/admin/users/'.$adminId)->assertStatus(422);
+    }
+
+    public function test_default_store_owns_existing_finance_data(): void
+    {
+        $this->seed();
+
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+
+        $this->assertSame('总店', $store->name);
+        $this->assertNotEmpty($owner->username);
+        $this->assertNull($owner->store_id);
+        $this->assertSame(0, Transaction::query()->whereNull('store_id')->count());
+        $this->assertSame(0, OpeningBalance::query()->whereNull('store_id')->count());
     }
 }
