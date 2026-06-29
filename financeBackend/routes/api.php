@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\Admin\I18nController as AdminI18nController;
 use App\Http\Controllers\Api\Admin\OpeningBalanceController as AdminOpeningBalanceController;
 use App\Http\Controllers\Api\Admin\RecyclePriceController as AdminRecyclePriceController;
 use App\Http\Controllers\Api\Admin\TransactionController as AdminTransactionController;
+use App\Http\Controllers\Api\Admin\StoreController as AdminStoreController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\App\AuthController as AppAuthController;
 use App\Http\Controllers\Api\App\CategoryController as AppCategoryController;
@@ -37,6 +38,7 @@ Route::prefix('admin')->group(function (): void {
     Route::apiResource('users', AdminUserController::class)
         ->only(['index', 'store', 'update', 'destroy'])
         ->parameters(['users' => 'adminUser']);
+    Route::apiResource('stores', AdminStoreController::class)->except(['show']);
     Route::apiResource('categories', AdminCategoryController::class)->except(['show']);
     Route::get('transactions', [AdminTransactionController::class, 'index']);
     Route::post('transactions', [AdminTransactionController::class, 'store']);

@@ -102,6 +102,13 @@ class UserController extends Controller
     {
         $rules = [
             'name' => ['required', 'string', 'max:100'],
+            'username' => [
+                'required',
+                'string',
+                'max:100',
+                'alpha_dash',
+                Rule::unique('admin_users', 'username')->ignore($request->route('adminUser')),
+            ],
             'email' => [
                 'required',
                 'email',
@@ -109,6 +116,7 @@ class UserController extends Controller
                 Rule::unique('admin_users', 'email')->ignore($request->route('adminUser')),
             ],
             'enabled' => ['boolean'],
+            'store_id' => ['required', 'integer', Rule::exists('stores', 'id')->where('enabled', true)],
             'permissions' => ['array'],
             'permissions.*' => [Rule::in(array_keys(AdminUser::PERMISSIONS))],
         ];

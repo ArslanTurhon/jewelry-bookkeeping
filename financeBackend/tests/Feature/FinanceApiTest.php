@@ -242,11 +242,14 @@ class FinanceApiTest extends TestCase
         ])->assertOk();
 
         $token = $login->json('token');
+        $defaultStoreId = Store::query()->where('is_default', true)->value('id');
 
         $created = $this->withToken($token)->postJson('/api/admin/users', [
             'name' => '店员A',
+            'username' => 'staff-a',
             'email' => 'staff@example.test',
             'password' => 'secret123',
+            'store_id' => $defaultStoreId,
             'enabled' => true,
             'permissions' => ['dashboard', 'transactions', 'users'],
         ])->assertCreated()
@@ -255,7 +258,9 @@ class FinanceApiTest extends TestCase
 
         $this->withToken($token)->putJson('/api/admin/users/'.$created['id'], [
             'name' => '店员A改',
+            'username' => 'staff-a',
             'email' => 'staff@example.test',
+            'store_id' => $defaultStoreId,
             'enabled' => true,
             'permissions' => ['dashboard'],
         ])->assertOk()->assertJsonPath('permissions', ['dashboard']);
@@ -481,5 +486,39 @@ class FinanceApiTest extends TestCase
 
         $this->assertSame($first->id, $created['store_id']);
         $this->assertSame($staff->id, $created['recorded_by_admin_id']);
+    }
+
+    public function test_owner_manages_stores_and_assigns_staff_to_one_store(): void
+    {
+        $this->seed();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'owner-store-token'])->save();
+
+        $store = $this->withToken('owner-store-token')
+            ->postJson('/api/admin/stores', ['name' => '二店'])
+            ->assertCreated()
+            ->json();
+
+        $staff = $this->withToken('owner-store-token')->postJson('/api/admin/users', [
+            'name' => '二店员工',
+            'username' => 'second-store-staff',
+            'email' => 'second-store@example.test',
+            'password' => 'secret123',
+            'store_id' => $store['id'],
+            'enabled' => true,
+            'permissions' => ['dashboard', 'transactions'],
+        ])->assertCreated()
+            ->assertJsonPath('store.id', $store['id'])
+            ->json();
+
+        AdminUser::query()->findOrFail($staff['id'])->forceFill(['api_token' => 'second-store-token'])->save();
+        $this->withToken('second-store-token')
+            ->postJson('/api/admin/stores', ['name' => '无权创建'])
+            ->assertForbidden();
+
+        $this->withToken('owner-store-token')
+            ->deleteJson('/api/admin/stores/'.$store['id'])
+            ->assertOk();
+        $this->assertFalse(Store::query()->findOrFail($store['id'])->enabled);
     }
 }

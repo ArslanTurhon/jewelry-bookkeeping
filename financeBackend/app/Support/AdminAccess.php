@@ -34,7 +34,11 @@ class AdminAccess
         return [
             'id' => $admin->id,
             'name' => $admin->name,
+            'username' => $admin->username,
             'email' => $admin->email,
+            'role' => $admin->is_super_admin ? 'owner' : 'staff',
+            'store_id' => $admin->store_id,
+            'store' => $admin->store,
             'is_super_admin' => $admin->is_super_admin,
             'enabled' => $admin->enabled,
             'permissions' => $admin->visiblePermissions(),
