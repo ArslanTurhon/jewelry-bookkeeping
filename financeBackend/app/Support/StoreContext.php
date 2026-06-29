@@ -22,9 +22,18 @@ class StoreContext
 
     public function writableStore(AdminUser $admin, Request $request): Store
     {
-        $storeId = $admin->is_super_admin
-            ? ($request->header('X-Store-Id') ?: Store::query()->where('is_default', true)->value('id'))
-            : ($admin->store_id ?: Store::query()->where('is_default', true)->value('id'));
+        if ($admin->is_super_admin) {
+            $storeId = $request->header('X-Store-Id');
+            if (! $storeId) {
+                $enabled = Store::query()->where('enabled', true);
+                if ($enabled->count() !== 1) {
+                    abort(response()->json(['message' => '请先选择一家店铺再录入'], 422));
+                }
+                $storeId = $enabled->value('id');
+            }
+        } else {
+            $storeId = $admin->store_id ?: Store::query()->where('is_default', true)->value('id');
+        }
 
         return Store::query()->whereKey($storeId)->where('enabled', true)->firstOrFail();
     }

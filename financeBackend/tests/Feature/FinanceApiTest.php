@@ -112,6 +112,8 @@ class FinanceApiTest extends TestCase
             'remark' => '电费',
         ])->assertCreated()->assertJsonFragment(['remark' => '电费']);
 
+        $this->assertSame(0, Transaction::query()->whereNull('store_id')->count());
+
         $this->withToken($user->api_token)
             ->getJson('/api/app/stats/current?month=2026-06')
             ->assertOk()
@@ -520,6 +522,48 @@ class FinanceApiTest extends TestCase
             ->deleteJson('/api/admin/stores/'.$store['id'])
             ->assertOk();
         $this->assertFalse(Store::query()->findOrFail($store['id'])->enabled);
+    }
+
+    public function test_owner_can_read_all_stores_but_must_choose_one_to_write(): void
+    {
+        $this->seed();
+        $first = Store::query()->where('is_default', true)->sole();
+        $second = Store::query()->create(['name' => '二店', 'enabled' => true]);
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'owner-all-stores-token'])->save();
+        $ledgerUser = User::query()->create([
+            'openid' => 'all-store-ledger-user',
+            'name' => '测试',
+            'api_token' => 'all-store-ledger-token',
+        ]);
+
+        foreach ([$first->id, $second->id] as $storeId) {
+            Transaction::query()->create([
+                'store_id' => $storeId,
+                'user_id' => $ledgerUser->id,
+                'business_type' => 'sale',
+                'payment_account' => 'cash',
+                'amount' => 100,
+                'stock_bucket' => 'sale_stock',
+                'product_type' => 'pure_gold',
+                'pure_gold_weight' => 1,
+                'transaction_date' => '2026-06-29',
+            ]);
+        }
+
+        $this->withToken('owner-all-stores-token')
+            ->getJson('/api/admin/transactions')
+            ->assertOk()
+            ->assertJsonPath('total', 2);
+
+        $this->withToken('owner-all-stores-token')->postJson('/api/admin/transactions', [
+            'business_type' => 'sale',
+            'payment_account' => 'cash',
+            'amount' => 200,
+            'product_type' => 'pure_gold',
+            'pure_gold_weight' => 2,
+            'transaction_date' => '2026-06-29',
+        ])->assertStatus(422);
     }
 
     public function test_user_can_change_own_profile_and_password(): void

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\App;
 
 use App\Http\Controllers\Controller;
+use App\Models\Store;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\BusinessDictionary;
@@ -37,7 +38,8 @@ class TransactionController extends Controller
         }
 
         $data = $this->validatedData($request);
-        $transaction = $user->transactions()->create($this->normalize($data));
+        $storeId = Store::query()->where('is_default', true)->value('id');
+        $transaction = $user->transactions()->create($this->normalize($data) + ['store_id' => $storeId]);
         $language = $request->header('X-Language', $request->query('lang', BusinessDictionary::DEFAULT_LANGUAGE));
 
         return response()->json($this->present($transaction, $dictionary, $language), 201);

@@ -48,6 +48,7 @@ const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
 const canUseTransactions = computed(() => hasPermission('transactions') || hasPermission('recycle_pure_gold') || hasPermission('recycle_gold_wrapped'))
 const canEditTransactions = computed(() => Boolean(adminUser.value?.is_super_admin))
+const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || selectedStoreId.value !== 'all')
 const visibleMenus = computed(() => [
   { key: 'dashboard', label: '首页', icon: Wallet },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
@@ -249,7 +250,7 @@ async function loadAll() {
 async function loadStores() {
   const { data } = await api.get('/admin/stores')
   stores.value = data || []
-  if (!selectedStoreId.value || !stores.value.some((store) => String(store.id) === String(selectedStoreId.value))) {
+  if (!selectedStoreId.value || (selectedStoreId.value !== 'all' && !stores.value.some((store) => String(store.id) === String(selectedStoreId.value)))) {
     selectedStoreId.value = String(stores.value.find((store) => store.enabled)?.id || '')
     if (selectedStoreId.value) localStorage.setItem('selected_store_id', selectedStoreId.value)
   }
@@ -257,11 +258,12 @@ async function loadStores() {
 
 async function changeStore(value) {
   selectedStoreId.value = String(value || '')
-  if (selectedStoreId.value) localStorage.setItem('selected_store_id', selectedStoreId.value)
-  else localStorage.removeItem('selected_store_id')
+  localStorage.setItem('selected_store_id', selectedStoreId.value || 'all')
   await refresh()
-  if (hasPermission('opening') && selectedStoreId.value) await loadOpening()
-  if (hasPermission('recycle_price') && selectedStoreId.value) await loadRecyclePrice(today())
+  if (selectedStoreId.value !== 'all') {
+    if (hasPermission('opening') && selectedStoreId.value) await loadOpening()
+    if (hasPermission('recycle_price') && selectedStoreId.value) await loadRecyclePrice(today())
+  }
 }
 
 function openCreateStore() {
@@ -678,6 +680,7 @@ onMounted(() => {
               style="width: 150px"
               @change="changeStore"
             >
+              <el-option label="全部店铺合计" value="all" />
               <el-option v-for="store in stores.filter((item) => item.enabled)" :key="store.id" :label="store.name" :value="String(store.id)" />
             </el-select>
             <el-tag v-else>{{ adminUser?.store?.name || '所属店铺' }}</el-tag>
@@ -744,11 +747,11 @@ onMounted(() => {
               <div class="card-header">
                 <span>流水管理</span>
                 <div>
-                  <el-button v-if="hasPermission('transactions')" type="success" :icon="Plus" @click="openCreate('sale')">销售</el-button>
-                  <el-button v-if="hasPermission('transactions')" type="primary" :icon="Plus" @click="openCreate('income')">收入</el-button>
-                  <el-button v-if="hasPermission('transactions') || hasPermission('recycle_pure_gold')" type="warning" :icon="Plus" @click="openCreateRecycle('pure_gold')">纯金回收</el-button>
-                  <el-button v-if="hasPermission('transactions') || hasPermission('recycle_gold_wrapped')" type="warning" :icon="Plus" @click="openCreateRecycle('gold_wrapped')">金包银回收</el-button>
-                  <el-button v-if="hasPermission('transactions')" type="danger" :icon="Plus" @click="openCreate('operating_expense')">支出</el-button>
+                  <el-button v-if="hasPermission('transactions')" :disabled="!canWriteCurrentStore" type="success" :icon="Plus" @click="openCreate('sale')">销售</el-button>
+                  <el-button v-if="hasPermission('transactions')" :disabled="!canWriteCurrentStore" type="primary" :icon="Plus" @click="openCreate('income')">收入</el-button>
+                  <el-button v-if="hasPermission('transactions') || hasPermission('recycle_pure_gold')" :disabled="!canWriteCurrentStore" type="warning" :icon="Plus" @click="openCreateRecycle('pure_gold')">纯金回收</el-button>
+                  <el-button v-if="hasPermission('transactions') || hasPermission('recycle_gold_wrapped')" :disabled="!canWriteCurrentStore" type="warning" :icon="Plus" @click="openCreateRecycle('gold_wrapped')">金包银回收</el-button>
+                  <el-button v-if="hasPermission('transactions')" :disabled="!canWriteCurrentStore" type="danger" :icon="Plus" @click="openCreate('operating_expense')">支出</el-button>
                 </div>
               </div>
             </template>
