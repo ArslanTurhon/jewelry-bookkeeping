@@ -9,7 +9,9 @@ return new class extends Migration
 {
     public function up(): void
     {
-        DB::statement("ALTER TABLE transactions MODIFY payment_account ENUM('cash', 'online', 'pure_gold_fund', 'mixed') NOT NULL");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE transactions MODIFY payment_account ENUM('cash', 'online', 'pure_gold_fund', 'mixed') NOT NULL");
+        }
 
         Schema::table('transactions', function (Blueprint $table): void {
             $table->decimal('cash_amount', 12, 2)->default(0)->after('amount');
@@ -39,6 +41,8 @@ return new class extends Migration
             $table->dropColumn(['cash_amount', 'online_amount']);
         });
 
-        DB::statement("ALTER TABLE transactions MODIFY payment_account ENUM('cash', 'online', 'pure_gold_fund') NOT NULL");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE transactions MODIFY payment_account ENUM('cash', 'online', 'pure_gold_fund') NOT NULL");
+        }
     }
 };
