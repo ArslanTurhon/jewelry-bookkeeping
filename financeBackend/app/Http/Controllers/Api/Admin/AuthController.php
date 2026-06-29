@@ -8,17 +8,23 @@ use App\Support\AdminAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
     public function login(Request $request)
     {
         $data = $request->validate([
-            'email' => ['required', 'email'],
+            'account' => ['nullable', 'string', 'max:255', 'required_without:email'],
+            'email' => ['nullable', 'email', 'required_without:account'],
             'password' => ['required', 'string'],
         ]);
 
-        $admin = AdminUser::query()->where('email', $data['email'])->first();
+        $account = $data['account'] ?? $data['email'];
+        $admin = AdminUser::query()
+            ->where('username', $account)
+            ->orWhere('email', $account)
+            ->first();
 
         if (! $admin || ! Hash::check($data['password'], $admin->password)) {
             return response()->json(['message' => '账号或密码错误'], 422);
@@ -58,5 +64,53 @@ class AuthController extends Controller
         }
 
         return response()->json(['message' => 'logged out']);
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $admin = AdminAccess::require($request);
+        if (! $admin instanceof AdminUser) {
+            return $admin;
+        }
+
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:100'],
+            'username' => [
+                'required',
+                'string',
+                'max:100',
+                'alpha_dash',
+                Rule::unique('admin_users', 'username')->ignore($admin->id),
+            ],
+        ]);
+        $admin->update($data);
+
+        return response()->json(AdminAccess::present($admin->fresh()));
+    }
+
+    public function updatePassword(Request $request)
+    {
+        $admin = AdminAccess::require($request);
+        if (! $admin instanceof AdminUser) {
+            return $admin;
+        }
+
+        $data = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'max:100', 'confirmed'],
+        ]);
+        if (! Hash::check($data['current_password'], $admin->password)) {
+            return response()->json([
+                'message' => '原密码不正确',
+                'errors' => ['current_password' => ['原密码不正确']],
+            ], 422);
+        }
+
+        $admin->forceFill([
+            'password' => $data['password'],
+            'api_token' => null,
+        ])->save();
+
+        return response()->json(['message' => 'password updated']);
     }
 }

@@ -32,6 +32,8 @@ Route::prefix('app')->group(function (): void {
 Route::prefix('admin')->group(function (): void {
     Route::post('login', [AdminAuthController::class, 'login']);
     Route::get('me', [AdminAuthController::class, 'me']);
+    Route::put('me/profile', [AdminAuthController::class, 'updateProfile']);
+    Route::put('me/password', [AdminAuthController::class, 'updatePassword']);
     Route::post('logout', [AdminAuthController::class, 'logout']);
     Route::get('users/permissions', [AdminUserController::class, 'permissions']);
     Route::post('users/{adminUser}/reset-password', [AdminUserController::class, 'resetPassword']);

@@ -521,4 +521,36 @@ class FinanceApiTest extends TestCase
             ->assertOk();
         $this->assertFalse(Store::query()->findOrFail($store['id'])->enabled);
     }
+
+    public function test_user_can_change_own_profile_and_password(): void
+    {
+        $this->seed();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'owner-profile-token'])->save();
+
+        $this->withToken('owner-profile-token')->putJson('/api/admin/me/profile', [
+            'name' => '珠宝店老板',
+            'username' => 'boss',
+        ])->assertOk()
+            ->assertJsonPath('name', '珠宝店老板')
+            ->assertJsonPath('username', 'boss');
+
+        $this->withToken('owner-profile-token')->putJson('/api/admin/me/password', [
+            'current_password' => 'wrong-password',
+            'password' => 'new-secret-123',
+            'password_confirmation' => 'new-secret-123',
+        ])->assertStatus(422);
+
+        $this->withToken('owner-profile-token')->putJson('/api/admin/me/password', [
+            'current_password' => 'password',
+            'password' => 'new-secret-123',
+            'password_confirmation' => 'new-secret-123',
+        ])->assertOk();
+
+        $this->withToken('owner-profile-token')->getJson('/api/admin/me')->assertUnauthorized();
+        $this->postJson('/api/admin/login', [
+            'account' => 'boss',
+            'password' => 'new-secret-123',
+        ])->assertOk()->assertJsonPath('admin.username', 'boss');
+    }
 }
