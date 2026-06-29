@@ -10,6 +10,10 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`
   }
   config.headers['X-Language'] = localStorage.getItem('language') || 'zh-CN'
+  const storeId = localStorage.getItem('selected_store_id')
+  if (storeId) {
+    config.headers['X-Store-Id'] = storeId
+  }
   return config
 })
 

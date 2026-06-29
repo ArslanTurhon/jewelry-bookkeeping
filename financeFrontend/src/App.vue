@@ -6,7 +6,7 @@ import { api, formatMoney } from './api'
 
 const token = ref(localStorage.getItem('admin_token') || '')
 const adminUser = ref(JSON.parse(localStorage.getItem('admin_user') || 'null'))
-const loginForm = reactive({ email: '', password: '' })
+const loginForm = reactive({ account: '', password: '' })
 const loading = ref(false)
 const activeMenu = ref('dashboard')
 const mobileMenu = ref(false)
@@ -25,6 +25,8 @@ const recyclePrice = reactive({ price_date: today(), reference_gold_price: 0, re
 const filters = reactive({ business_type: '', payment_account: '', product_type: '', date_from: '', date_to: '' })
 const pagination = reactive({ page: 1, perPage: 50, total: 0 })
 const users = ref([])
+const stores = ref([])
+const selectedStoreId = ref(localStorage.getItem('selected_store_id') || '')
 const userPagination = reactive({ page: 1, perPage: 50, total: 0 })
 const permissionOptions = ref({})
 const userDialog = ref(false)
@@ -33,6 +35,12 @@ const editingUserId = ref(null)
 const resetUserId = ref(null)
 const userForm = reactive(defaultUserForm())
 const passwordForm = reactive({ password: '' })
+const storeDialog = ref(false)
+const editingStoreId = ref(null)
+const storeForm = reactive({ name: '', enabled: true })
+const profileDialog = ref(false)
+const profileForm = reactive({ name: '', username: '' })
+const ownPasswordForm = reactive({ current_password: '', password: '', password_confirmation: '' })
 const form = reactive(defaultForm())
 const itemRows = ref([defaultItem()])
 
@@ -45,6 +53,7 @@ const visibleMenus = computed(() => [
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
   { key: 'opening', label: '期初', icon: Coin },
   { key: 'users', label: '用户管理', icon: User },
+  { key: 'stores', label: '店铺管理', icon: Coin, visible: Boolean(adminUser.value?.is_super_admin) },
 ].filter((item) => item.visible ?? hasPermission(item.key)))
 const t = (key, fallback = key) => i18n.value.translations?.[key] || fallback
 const isRecycle = computed(() => form.business_type === 'recycle')
@@ -186,9 +195,11 @@ function defaultItem() {
 function defaultUserForm() {
   return {
     name: '',
+    username: '',
     email: '',
     password: '',
     enabled: true,
+    store_id: '',
     permissions: ['dashboard', 'transactions'],
   }
 }
@@ -218,6 +229,11 @@ function logout() {
 }
 
 async function loadAll() {
+  if (adminUser.value?.is_super_admin) await loadStores()
+  else {
+    selectedStoreId.value = String(adminUser.value?.store_id || '')
+    localStorage.setItem('selected_store_id', selectedStoreId.value)
+  }
   const tasks = [loadI18n()]
   if (hasPermission('dashboard')) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
@@ -228,6 +244,70 @@ async function loadAll() {
   if (!visibleMenus.value.some((item) => item.key === activeMenu.value)) {
     activeMenu.value = visibleMenus.value[0]?.key || ''
   }
+}
+
+async function loadStores() {
+  const { data } = await api.get('/admin/stores')
+  stores.value = data || []
+  if (!selectedStoreId.value || !stores.value.some((store) => String(store.id) === String(selectedStoreId.value))) {
+    selectedStoreId.value = String(stores.value.find((store) => store.enabled)?.id || '')
+    if (selectedStoreId.value) localStorage.setItem('selected_store_id', selectedStoreId.value)
+  }
+}
+
+async function changeStore(value) {
+  selectedStoreId.value = String(value || '')
+  if (selectedStoreId.value) localStorage.setItem('selected_store_id', selectedStoreId.value)
+  else localStorage.removeItem('selected_store_id')
+  await refresh()
+  if (hasPermission('opening') && selectedStoreId.value) await loadOpening()
+  if (hasPermission('recycle_price') && selectedStoreId.value) await loadRecyclePrice(today())
+}
+
+function openCreateStore() {
+  editingStoreId.value = null
+  Object.assign(storeForm, { name: '', enabled: true })
+  storeDialog.value = true
+}
+
+function openEditStore(store) {
+  editingStoreId.value = store.id
+  Object.assign(storeForm, { name: store.name, enabled: store.enabled })
+  storeDialog.value = true
+}
+
+async function saveStore() {
+  if (editingStoreId.value) await api.put(`/admin/stores/${editingStoreId.value}`, storeForm)
+  else await api.post('/admin/stores', storeForm)
+  storeDialog.value = false
+  await loadStores()
+  ElMessage.success('店铺已保存')
+}
+
+async function disableStore(store) {
+  await ElMessageBox.confirm(`停用店铺 ${store.name}？历史账目会继续保留。`, '确认停用', { type: 'warning' })
+  await api.delete(`/admin/stores/${store.id}`)
+  await loadStores()
+}
+
+function openProfile() {
+  Object.assign(profileForm, { name: adminUser.value?.name || '', username: adminUser.value?.username || '' })
+  Object.assign(ownPasswordForm, { current_password: '', password: '', password_confirmation: '' })
+  profileDialog.value = true
+}
+
+async function saveProfile() {
+  const { data } = await api.put('/admin/me/profile', profileForm)
+  adminUser.value = data
+  localStorage.setItem('admin_user', JSON.stringify(data))
+  ElMessage.success('账户资料已保存')
+}
+
+async function changeOwnPassword() {
+  await api.put('/admin/me/password', ownPasswordForm)
+  ElMessage.success('密码已修改，请重新登录')
+  profileDialog.value = false
+  logout()
 }
 
 async function loadI18n() {
@@ -334,9 +414,11 @@ function openCreateUser() {
 function openEditUser(row) {
   Object.assign(userForm, {
     name: row.name,
+    username: row.username,
     email: row.email,
     password: '',
     enabled: row.enabled,
+    store_id: row.store_id,
     permissions: row.permissions || [],
   })
   editingUserId.value = row.id
@@ -553,7 +635,7 @@ onMounted(() => {
       <el-card class="login-card">
         <template #header>金银首饰店账本后台</template>
         <el-form :model="loginForm" label-position="top" @submit.prevent="login">
-          <el-form-item label="账号"><el-input v-model="loginForm.email" /></el-form-item>
+          <el-form-item label="登录账号"><el-input v-model="loginForm.account" /></el-form-item>
           <el-form-item label="密码"><el-input v-model="loginForm.password" type="password" show-password /></el-form-item>
           <el-button type="primary" :loading="loading" native-type="submit" class="full">登录</el-button>
         </el-form>
@@ -570,10 +652,11 @@ onMounted(() => {
         </el-menu>
         <div class="current-user">
           <strong>{{ adminUser?.name || '未命名用户' }}</strong>
-          <span>{{ adminUser?.email }}</span>
+          <span>{{ adminUser?.username }}</span>
           <el-tag size="small" :type="adminUser?.is_super_admin ? 'danger' : 'info'">
-            {{ adminUser?.is_super_admin ? '超级管理员' : '普通用户' }}
+            {{ adminUser?.is_super_admin ? '老板' : '员工' }}
           </el-tag>
+          <el-button text @click="openProfile">我的账户</el-button>
         </div>
         <el-button plain class="logout" @click="logout">退出</el-button>
       </el-aside>
@@ -588,6 +671,16 @@ onMounted(() => {
             </div>
           </div>
           <div class="header-actions">
+            <el-select
+              v-if="adminUser?.is_super_admin"
+              v-model="selectedStoreId"
+              placeholder="选择店铺"
+              style="width: 150px"
+              @change="changeStore"
+            >
+              <el-option v-for="store in stores.filter((item) => item.enabled)" :key="store.id" :label="store.name" :value="String(store.id)" />
+            </el-select>
+            <el-tag v-else>{{ adminUser?.store?.name || '所属店铺' }}</el-tag>
             <el-date-picker v-model="month" type="month" value-format="YYYY-MM" @change="refresh" />
             <el-button :icon="Refresh" @click="refresh">刷新</el-button>
           </div>
@@ -735,10 +828,11 @@ onMounted(() => {
             <div class="table-scroll">
               <el-table :data="users" stripe border>
                 <el-table-column prop="name" label="姓名" width="140" />
-                <el-table-column prop="email" label="账号邮箱" min-width="180" />
+                <el-table-column prop="username" label="登录账号" min-width="150" />
+                <el-table-column prop="store.name" label="所属店铺" min-width="140" />
                 <el-table-column label="角色" width="130">
                   <template #default="{ row }">
-                    <el-tag :type="row.is_super_admin ? 'danger' : 'info'">{{ row.is_super_admin ? '超级管理员' : '普通用户' }}</el-tag>
+                    <el-tag :type="row.is_super_admin ? 'danger' : 'info'">{{ row.is_super_admin ? '老板' : '员工' }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column label="状态" width="100">
@@ -776,6 +870,31 @@ onMounted(() => {
             />
           </el-card>
         </el-main>
+
+        <el-main v-if="activeMenu === 'stores'">
+          <el-card>
+            <template #header>
+              <div class="card-header">
+                <span>店铺管理</span>
+                <el-button type="primary" :icon="Plus" @click="openCreateStore">新增店铺</el-button>
+              </div>
+            </template>
+            <el-table :data="stores" stripe border>
+              <el-table-column prop="name" label="店铺名称" min-width="180" />
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }">
+                  <el-tag :type="row.enabled ? 'success' : 'warning'">{{ row.enabled ? '使用中' : '已停用' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="180">
+                <template #default="{ row }">
+                  <el-button :icon="Edit" text @click="openEditStore(row)">修改</el-button>
+                  <el-button v-if="row.enabled" type="danger" text @click="disableStore(row)">停用</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        </el-main>
       </el-container>
     </el-container>
 
@@ -787,10 +906,11 @@ onMounted(() => {
       </el-menu>
       <div class="current-user">
         <strong>{{ adminUser?.name || '未命名用户' }}</strong>
-        <span>{{ adminUser?.email }}</span>
+        <span>{{ adminUser?.username }}</span>
         <el-tag size="small" :type="adminUser?.is_super_admin ? 'danger' : 'info'">
-          {{ adminUser?.is_super_admin ? '超级管理员' : '普通用户' }}
+          {{ adminUser?.is_super_admin ? '老板' : '员工' }}
         </el-tag>
+        <el-button text @click="openProfile">我的账户</el-button>
       </div>
       <el-button plain class="logout" @click="logout">退出</el-button>
     </el-drawer>
@@ -915,7 +1035,13 @@ onMounted(() => {
     <el-dialog v-model="userDialog" :title="editingUserId ? '编辑用户' : '新增用户'" width="min(94vw, 620px)" class="responsive-dialog">
       <el-form :model="userForm" label-width="100px" class="responsive-form">
         <el-form-item label="姓名"><el-input v-model="userForm.name" /></el-form-item>
+        <el-form-item label="登录账号"><el-input v-model="userForm.username" /></el-form-item>
         <el-form-item label="邮箱"><el-input v-model="userForm.email" /></el-form-item>
+        <el-form-item label="所属店铺">
+          <el-select v-model="userForm.store_id">
+            <el-option v-for="store in stores.filter((item) => item.enabled)" :key="store.id" :label="store.name" :value="store.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item v-if="!editingUserId" label="初始密码"><el-input v-model="userForm.password" type="password" show-password /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="userForm.enabled" /></el-form-item>
         <el-form-item label="模块权限">
@@ -928,6 +1054,31 @@ onMounted(() => {
         <el-button @click="userDialog = false">取消</el-button>
         <el-button type="primary" @click="saveUser">保存</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="storeDialog" :title="editingStoreId ? '修改店铺' : '新增店铺'" width="min(94vw, 460px)">
+      <el-form :model="storeForm" label-width="90px">
+        <el-form-item label="店铺名称"><el-input v-model="storeForm.name" /></el-form-item>
+        <el-form-item v-if="editingStoreId" label="启用"><el-switch v-model="storeForm.enabled" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="storeDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveStore">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="profileDialog" title="我的账户" width="min(94vw, 520px)">
+      <el-form label-width="100px">
+        <el-divider content-position="left">账户资料</el-divider>
+        <el-form-item label="姓名"><el-input v-model="profileForm.name" /></el-form-item>
+        <el-form-item label="登录账号"><el-input v-model="profileForm.username" /></el-form-item>
+        <el-form-item><el-button type="primary" @click="saveProfile">保存资料</el-button></el-form-item>
+        <el-divider content-position="left">修改密码</el-divider>
+        <el-form-item label="原密码"><el-input v-model="ownPasswordForm.current_password" type="password" show-password /></el-form-item>
+        <el-form-item label="新密码"><el-input v-model="ownPasswordForm.password" type="password" show-password /></el-form-item>
+        <el-form-item label="确认新密码"><el-input v-model="ownPasswordForm.password_confirmation" type="password" show-password /></el-form-item>
+        <el-form-item><el-button type="warning" @click="changeOwnPassword">修改密码</el-button></el-form-item>
+      </el-form>
     </el-dialog>
 
     <el-dialog v-model="passwordDialog" title="重置密码" width="min(94vw, 420px)" class="responsive-dialog">
