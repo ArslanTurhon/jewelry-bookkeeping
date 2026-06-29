@@ -1,6 +1,8 @@
 .DS_Store
 backups/
 release/
+github access token.txt
+.git-credential-github-token
 
 # Backend
 financeBackend/.env
