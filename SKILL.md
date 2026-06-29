@@ -84,6 +84,9 @@ npm run build
 
 - `VERSION` contains the current semantic version.
 - Stable local versions use an exact Git tag such as `0.1.0`.
+- Routine iterations increment the patch component (`0.x.1`, `0.x.2`, and so on).
+- Every new minor milestone matching `0.x.0` (`0.1.0`, `0.2.0`, and so on) must be published as a GitHub Release after its commit and tag are pushed.
+- A GitHub Release must use the exact version tag and include concise release notes; attach deployment artifacts when they are intended for distribution.
 - Before creating a version, commit all intended changes, run verification, and create both a Git bundle and a project snapshot outside the repository.
 - When the user requests “回滚到 x.x.x 版本”, first confirm that the matching tag and backup exist. Explain which commits and uncommitted changes would be affected before performing any destructive rollback.
 - Preserve the current state in a safety branch or backup before changing the working tree to an older version.
