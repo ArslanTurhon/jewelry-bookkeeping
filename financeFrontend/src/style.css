@@ -440,6 +440,18 @@ body {
   height: 320px;
 }
 
+.tool-section {
+  padding: 20px;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.tool-section h3,
+.tool-section p {
+  margin: 0;
+}
+
 @media (max-width: 900px) {
   body {
     overflow: auto;

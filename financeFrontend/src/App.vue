@@ -21,6 +21,9 @@ const stats = ref(null)
 const trendChartElement = ref(null)
 let trendChart = null
 const transactions = ref([])
+const exchanges = ref([])
+const exchangeDialog = ref(false)
+const exchangeForm = reactive(defaultExchangeForm())
 const opening = ref({})
 const accountDrawer = ref(false)
 const accountDetail = ref({ entries: [] })
@@ -79,6 +82,7 @@ const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || 
 const visibleMenus = computed(() => [
   { key: 'dashboard', label: '首页', icon: Wallet, visible: Boolean(adminUser.value?.is_super_admin) },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
+  { key: 'exchanges', label: '换现', icon: CreditCard, visible: hasPermission('transactions') },
   { key: 'reconciliation', label: adminUser.value?.is_super_admin ? '每日交账' : '今日交账', icon: Check, visible: canUseTransactions.value },
   { key: 'opening', label: '期初', icon: Coin },
   { key: 'users', label: '用户管理', icon: User },
@@ -222,6 +226,17 @@ function defaultItem() {
   }
 }
 
+function defaultExchangeForm() {
+  return {
+    direction: 'cash_in',
+    online_method: 'wechat',
+    amount: 0,
+    fee: 0,
+    exchange_date: today(),
+    remark: '',
+  }
+}
+
 function defaultUserForm() {
   return {
     name: '',
@@ -275,6 +290,7 @@ async function loadAll() {
   const tasks = [loadI18n()]
   if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
+  if (hasPermission('transactions')) tasks.push(loadExchanges())
   if (hasPermission('opening')) tasks.push(loadOpening())
   if (hasPermission('recycle_price')) tasks.push(loadRecyclePrice(today()))
   if (hasPermission('users')) tasks.push(loadUsers(), loadPermissionOptions())
@@ -413,6 +429,32 @@ async function loadTransactions() {
   pagination.page = data.current_page || pagination.page
 }
 
+async function loadExchanges() {
+  const { data } = await api.get('/admin/exchanges', {
+    params: { store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value, per_page: 50 },
+  })
+  exchanges.value = data.data || []
+}
+
+function openExchange() {
+  Object.assign(exchangeForm, defaultExchangeForm())
+  exchangeDialog.value = true
+}
+
+async function saveExchange() {
+  try {
+    await api.post('/admin/exchanges', {
+      ...exchangeForm,
+      store_id: selectedStoreId.value === 'all' ? null : selectedStoreId.value,
+    })
+    exchangeDialog.value = false
+    await Promise.all([loadExchanges(), adminUser.value?.is_super_admin ? loadStats() : Promise.resolve()])
+    ElMessage.success('换现已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '换现保存失败')
+  }
+}
+
 async function loadAuditLogs() {
   if (!adminUser.value?.is_super_admin) return
   const { data } = await api.get('/admin/audit-logs', {
@@ -451,6 +493,7 @@ async function refresh() {
   const tasks = []
   if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
+  if (hasPermission('transactions')) tasks.push(loadExchanges())
   if (hasPermission('users')) tasks.push(loadUsers())
   if (adminUser.value?.is_super_admin && activeMenu.value === 'audit') tasks.push(loadAuditLogs())
   if (activeMenu.value === 'reconciliation') tasks.push(loadReconciliations())
@@ -461,6 +504,7 @@ async function selectMenu(key) {
   activeMenu.value = key
   mobileMenu.value = false
   if (key === 'audit') await loadAuditLogs()
+  if (key === 'exchanges') await loadExchanges()
   if (key === 'reconciliation') await loadReconciliations()
 }
 
@@ -1112,6 +1156,33 @@ onBeforeUnmount(() => trendChart?.dispose())
           </el-card>
         </el-main>
 
+        <el-main v-if="activeMenu === 'exchanges'">
+          <section class="tool-section">
+            <div class="card-header">
+              <div>
+                <h3>现金与线上换现</h3>
+                <p class="muted">每笔换现同时调整现金和指定线上账户。</p>
+              </div>
+              <el-button type="primary" :icon="Plus" :disabled="!canWriteCurrentStore" @click="openExchange">新增换现</el-button>
+            </div>
+            <div class="table-scroll section">
+              <el-table :data="exchanges" stripe border>
+                <el-table-column prop="exchange_date" label="日期" width="120" />
+                <el-table-column label="方向" min-width="210">
+                  <template #default="{ row }">{{ row.direction === 'cash_in' ? '收现金，转出线上' : '收线上，付出现金' }}</template>
+                </el-table-column>
+                <el-table-column label="线上账户" width="120">
+                  <template #default="{ row }">{{ { bank: '银行卡', wechat: '微信', alipay: '支付宝' }[row.online_method] }}</template>
+                </el-table-column>
+                <el-table-column label="换现金额" width="130"><template #default="{ row }">¥{{ formatMoney(row.amount) }}</template></el-table-column>
+                <el-table-column label="手续费" width="120"><template #default="{ row }">¥{{ formatMoney(row.fee) }}</template></el-table-column>
+                <el-table-column prop="recorder.name" label="经手人" width="130" />
+                <el-table-column prop="remark" label="备注" min-width="160" />
+              </el-table>
+            </div>
+          </section>
+        </el-main>
+
         <el-main v-if="activeMenu === 'reconciliation'" v-loading="reconciliationLoading">
           <template v-if="!adminUser?.is_super_admin">
             <el-alert
@@ -1428,6 +1499,32 @@ onBeforeUnmount(() => trendChart?.dispose())
         </el-table>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="exchangeDialog" title="新增换现" width="min(94vw, 560px)" class="responsive-dialog">
+      <el-form :model="exchangeForm" label-width="110px" class="responsive-form">
+        <el-form-item label="换现方向">
+          <el-radio-group v-model="exchangeForm.direction">
+            <el-radio-button value="cash_in">收现金，转线上</el-radio-button>
+            <el-radio-button value="online_in">收线上，付现金</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="线上账户">
+          <el-select v-model="exchangeForm.online_method">
+            <el-option label="微信" value="wechat" />
+            <el-option label="支付宝" value="alipay" />
+            <el-option label="银行卡" value="bank" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="换现金额"><el-input-number v-model="exchangeForm.amount" :min="0" :precision="2" /></el-form-item>
+        <el-form-item label="手续费"><el-input-number v-model="exchangeForm.fee" :min="0" :precision="2" /></el-form-item>
+        <el-form-item label="日期"><el-date-picker v-model="exchangeForm.exchange_date" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="exchangeForm.remark" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exchangeDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveExchange">保存换现</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="transactionDialog" title="流水录入" width="min(94vw, 760px)" class="responsive-dialog">
       <el-form :model="form" label-width="110px" class="responsive-form">

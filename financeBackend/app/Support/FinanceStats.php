@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\AdminUser;
 use App\Models\DailyReconciliation;
+use App\Models\Exchange;
 use App\Models\OpeningBalance;
 use App\Models\ReconciliationSection;
 use App\Models\Store;
@@ -57,6 +58,12 @@ class FinanceStats
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->when($month, fn (Builder $query) => $query->where('transaction_date', 'like', $month.'%'))
             ->get();
+        $exchanges = Exchange::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->get();
+        $monthlyExchanges = $exchanges->filter(
+            fn (Exchange $exchange) => ! $month || str_starts_with($exchange->exchange_date->format('Y-m-d'), $month),
+        );
 
         $cash = $this->opening('cash', $storeId);
         $pureGoldFund = $this->opening('pure_gold_fund', $storeId);
@@ -72,6 +79,18 @@ class FinanceStats
         ];
         $this->applyOpeningStock($stock, $storeId);
         $recycleCost = $this->emptyRecycleCost();
+
+        foreach ($exchanges as $exchange) {
+            $amount = (float) $exchange->amount;
+            $fee = (float) $exchange->fee;
+            if ($exchange->direction === 'cash_in') {
+                $cash += $amount + $fee;
+                $online[$exchange->online_method] -= $amount;
+            } else {
+                $cash -= $amount;
+                $online[$exchange->online_method] += $amount + $fee;
+            }
+        }
 
         foreach ($records as $record) {
             $amountSign = match ($record->business_type) {
@@ -99,12 +118,13 @@ class FinanceStats
         }
 
         $monthlySales = (float) $monthly->where('business_type', 'sale')->sum('amount');
-        $monthlyIncome = (float) $monthly->where('business_type', 'income')->sum('amount');
+        $monthlyIncome = (float) $monthly->where('business_type', 'income')->sum('amount')
+            + (float) $monthlyExchanges->sum('fee');
         $monthlyRecycle = (float) $monthly->where('business_type', 'recycle')->sum('amount');
         $monthlyExpenses = (float) $monthly->where('business_type', 'operating_expense')->sum('amount');
         $onlineTotal = array_sum($online);
         $total = $cash + $onlineTotal + $pureGoldFund;
-        $dashboard = $this->dashboardSummary($records, $storeId);
+        $dashboard = $this->dashboardSummary($records, $exchanges, $storeId);
 
         return [
             'cash' => round($cash, 2),
@@ -130,11 +150,12 @@ class FinanceStats
         ];
     }
 
-    private function dashboardSummary($records, ?int $storeId): array
+    private function dashboardSummary($records, $exchanges, ?int $storeId): array
     {
         $today = now('Asia/Shanghai')->toDateString();
         $start = now('Asia/Shanghai')->subDays(6)->startOfDay();
         $todayRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->format('Y-m-d') === $today);
+        $todayExchanges = $exchanges->filter(fn (Exchange $exchange) => $exchange->exchange_date->format('Y-m-d') === $today);
         $trendRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->gte($start));
         $reports = DailyReconciliation::query()
             ->whereDate('reconciliation_date', $today)
@@ -170,7 +191,7 @@ class FinanceStats
             'today' => [
                 'sales' => round((float) $todayRecords->where('business_type', 'sale')->sum('amount'), 2),
                 'recycle' => round((float) $todayRecords->where('business_type', 'recycle')->sum('amount'), 2),
-                'exchange' => round((float) $todayRecords->where('business_type', 'exchange')->sum('amount'), 2),
+                'exchange' => round((float) $todayExchanges->sum('amount'), 2),
                 'operating_expenses' => round((float) $todayRecords->where('business_type', 'operating_expense')->sum('amount'), 2),
             ],
             'anomalies' => [

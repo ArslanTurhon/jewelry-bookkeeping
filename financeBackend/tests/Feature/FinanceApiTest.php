@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\AdminUser;
 use App\Models\AuditLog;
 use App\Models\DailyReconciliation;
+use App\Models\Exchange;
 use App\Models\OpeningBalance;
 use App\Models\ReconciliationSection;
 use App\Models\Store;
@@ -159,6 +160,86 @@ class FinanceApiTest extends TestCase
             'expense_category' => 'rent',
             'transaction_date' => '2026-06-10',
         ])->assertStatus(422)->assertJsonFragment(['message' => '非线上账户不能选择线上方式']);
+    }
+
+    public function test_exchange_updates_cash_and_online_together_and_records_fee(): void
+    {
+        Carbon::setTestNow('2026-07-01 12:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'cash')->update(['value' => 1000]);
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'online_wechat')->update(['value' => 1000]);
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '换现员工',
+            'username' => 'exchange-staff',
+            'email' => 'exchange-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'exchange-staff-token',
+        ]);
+
+        $this->withToken($staff->api_token)->postJson('/api/admin/exchanges', [
+            'direction' => 'cash_in',
+            'online_method' => 'wechat',
+            'amount' => 200,
+            'fee' => 5,
+            'exchange_date' => '2026-07-01',
+            'remark' => '客户给现金换微信',
+        ])->assertCreated()->assertJsonPath('fee', '5.00');
+
+        $this->withToken($staff->api_token)->postJson('/api/admin/exchanges', [
+            'direction' => 'online_in',
+            'online_method' => 'wechat',
+            'amount' => 100,
+            'fee' => 2,
+            'exchange_date' => '2026-07-01',
+        ])->assertCreated();
+
+        $this->assertDatabaseCount('exchanges', 2);
+        $this->assertSame(7.0, (float) Exchange::query()->sum('fee'));
+
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'exchange-owner-token'])->save();
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/stats/current?month=2026-07')
+            ->assertOk()
+            ->assertJsonPath('cash', 1105)
+            ->assertJsonPath('online.wechat', 902)
+            ->assertJsonPath('today.exchange', 300);
+    }
+
+    public function test_exchange_requires_authorized_store_direction_and_online_method(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '无流水员工',
+            'username' => 'no-exchange',
+            'email' => 'no-exchange@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['recycle_pure_gold'],
+            'api_token' => 'no-exchange-token',
+        ]);
+        $payload = [
+            'direction' => 'cash_in',
+            'online_method' => 'wechat',
+            'amount' => 100,
+            'fee' => 0,
+            'exchange_date' => '2026-07-01',
+        ];
+
+        $this->withToken($staff->api_token)->postJson('/api/admin/exchanges', $payload)->assertForbidden();
+        $staff->update(['permissions' => ['transactions']]);
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/exchanges', array_replace($payload, ['direction' => 'cash_only']))
+            ->assertStatus(422);
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/exchanges', array_replace($payload, ['online_method' => null]))
+            ->assertStatus(422);
     }
 
     public function test_admin_can_record_pure_gold_recycle_with_fund_and_unit_prices(): void

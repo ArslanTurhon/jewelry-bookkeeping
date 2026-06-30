@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\Admin\AuditLogController as AdminAuditLogController;
 use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
 use App\Http\Controllers\Api\Admin\CategoryController as AdminCategoryController;
+use App\Http\Controllers\Api\Admin\ExchangeController as AdminExchangeController;
 use App\Http\Controllers\Api\Admin\I18nController as AdminI18nController;
 use App\Http\Controllers\Api\Admin\OpeningBalanceController as AdminOpeningBalanceController;
 use App\Http\Controllers\Api\Admin\ReconciliationController as AdminReconciliationController;
@@ -48,6 +49,8 @@ Route::prefix('admin')->group(function (): void {
     Route::post('transactions', [AdminTransactionController::class, 'store']);
     Route::put('transactions/{transaction}', [AdminTransactionController::class, 'update']);
     Route::delete('transactions/{transaction}', [AdminTransactionController::class, 'destroy']);
+    Route::get('exchanges', [AdminExchangeController::class, 'index']);
+    Route::post('exchanges', [AdminExchangeController::class, 'store']);
     Route::get('account-details', [AdminTransactionController::class, 'accountDetails']);
     Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
     Route::get('reconciliations/today', [AdminReconciliationController::class, 'today']);
