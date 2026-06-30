@@ -355,6 +355,15 @@ body {
   margin-top: 16px;
 }
 
+.reconciliation-warning {
+  margin-bottom: 12px;
+}
+
+.reconciliation-subtitle {
+  margin: 20px 0 0;
+  color: #243247;
+}
+
 .reconciliation-actions {
   display: flex;
   justify-content: flex-end;

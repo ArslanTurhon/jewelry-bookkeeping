@@ -62,6 +62,7 @@ const reconciliationToday = ref({ sections: [] })
 const reconciliationReports = ref([])
 const reconciliationHistory = ref([])
 const reconciliationLoading = ref(false)
+const reconciliationReminderShown = ref(false)
 const reconciliationDraftTimers = new Map()
 const rolePresets = {
   pure_gold: ['dashboard', 'recycle_pure_gold'],
@@ -72,6 +73,7 @@ const rolePresets = {
 const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
 const canUseTransactions = computed(() => hasPermission('transactions') || hasPermission('recycle_pure_gold') || hasPermission('recycle_gold_wrapped'))
+const hasPendingReconciliation = computed(() => reconciliationToday.value.sections?.some((section) => ['draft', 'returned'].includes(section.status)))
 const canEditTransactions = computed(() => Boolean(adminUser.value?.is_super_admin))
 const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || selectedStoreId.value !== 'all')
 const visibleMenus = computed(() => [
@@ -482,6 +484,30 @@ const reconciliationLabels = {
   scrap_gold_wrapped_silver_gold_weight: '回收金包银金重',
   scrap_gold_wrapped_silver_silver_weight: '回收金包银银重',
   scrap_gold_wrapped_silver_pieces: '回收金包银件数',
+  recycle_amount: '回收总额',
+  recycle_pure_gold_weight: '回收纯金克重',
+  recycle_pure_gold_pieces: '回收纯金件数',
+  sales_amount: '销售总额',
+  sales_cash: '销售收现金',
+  sales_wechat: '销售收微信',
+  sales_alipay: '销售收支付宝',
+  sales_bank: '销售收银行卡',
+  sales_pure_gold_weight: '卖出纯金克重',
+  sales_pure_gold_pieces: '卖出纯金件数',
+  sales_pure_silver_weight: '卖出纯银克重',
+  sales_pure_silver_pieces: '卖出纯银件数',
+  sales_gold_wrapped_gold_weight: '卖出金包银金重',
+  sales_gold_wrapped_silver_weight: '卖出金包银银重',
+  sales_gold_wrapped_pieces: '卖出金包银件数',
+  recycle_cash: '回收付现金',
+  recycle_wechat: '回收付微信',
+  recycle_alipay: '回收付支付宝',
+  recycle_bank: '回收付银行卡',
+  recycle_pure_silver_weight: '回收纯银克重',
+  recycle_pure_silver_pieces: '回收纯银件数',
+  recycle_gold_wrapped_gold_weight: '回收金包银金重',
+  recycle_gold_wrapped_silver_weight: '回收金包银银重',
+  recycle_gold_wrapped_pieces: '回收金包银件数',
 }
 
 function reconciliationStatus(status) {
@@ -501,8 +527,12 @@ function reconciliationStatusType(status) {
 
 function initializeReconciliationSection(section) {
   section.no_business = Boolean(section.no_business)
+  section.business_summary ||= {}
   section.actual_snapshot ||= {}
   section.difference_reason ||= ''
+  for (const field of section.business_summary_fields || []) {
+    if (section.business_summary[field] === undefined) section.business_summary[field] = 0
+  }
   for (const field of section.fields || []) {
     if (section.actual_snapshot[field] === undefined) section.actual_snapshot[field] = 0
   }
@@ -527,6 +557,13 @@ async function loadReconciliations() {
         sections: (data.sections || []).map(initializeReconciliationSection),
       }
       reconciliationHistory.value = history.data || []
+      if (hasPendingReconciliation.value && !reconciliationReminderShown.value) {
+        reconciliationReminderShown.value = true
+        ElMessageBox.alert('今天的交账还没有完成，请核对业务合计并完成盘点后提交。', '今日交账提醒', {
+          confirmButtonText: '开始交账',
+          type: 'warning',
+        }).catch(() => {})
+      }
     }
   } finally {
     reconciliationLoading.value = false
@@ -547,10 +584,20 @@ async function saveReconciliationDraft(section) {
       actual_snapshot: section.actual_snapshot,
       difference_reason: section.difference_reason || null,
     })
-    Object.assign(section, data, { fields: section.fields })
+    Object.assign(section, data, {
+      fields: section.fields,
+      business_summary_fields: section.business_summary_fields,
+    })
   } catch (error) {
     ElMessage.error(error.response?.data?.message || '草稿保存失败')
   }
+}
+
+function toggleNoBusiness(section, checked) {
+  if (checked) {
+    for (const field of section.business_summary_fields || []) section.business_summary[field] = 0
+  }
+  scheduleReconciliationDraft(section)
 }
 
 async function submitReconciliation(section) {
@@ -1068,6 +1115,14 @@ onBeforeUnmount(() => trendChart?.dispose())
         <el-main v-if="activeMenu === 'reconciliation'" v-loading="reconciliationLoading">
           <template v-if="!adminUser?.is_super_admin">
             <el-alert
+              v-if="hasPendingReconciliation"
+              class="reconciliation-warning"
+              title="今日交账尚未完成"
+              type="error"
+              :closable="false"
+              show-icon
+            />
+            <el-alert
               title="请按实际数量填写。提交前系统不会显示账面数字；提交后如有差额，需要说明原因。"
               type="info"
               :closable="false"
@@ -1085,10 +1140,23 @@ onBeforeUnmount(() => trendChart?.dispose())
                 <el-checkbox
                   v-model="section.no_business"
                   :disabled="['submitted', 'confirmed'].includes(section.status)"
-                  @change="scheduleReconciliationDraft(section)"
+                  @change="toggleNoBusiness(section, $event)"
                 >
                   今日无相关业务
                 </el-checkbox>
+                <h4 class="reconciliation-subtitle">今日业务合计</h4>
+                <div class="reconciliation-grid">
+                  <el-form-item v-for="field in section.business_summary_fields" :key="field" :label="reconciliationLabels[field]">
+                    <el-input-number
+                      v-model="section.business_summary[field]"
+                      :disabled="section.no_business || ['submitted', 'confirmed'].includes(section.status)"
+                      :precision="field.includes('pieces') ? 0 : field.includes('weight') ? 3 : 2"
+                      :min="0"
+                      @change="scheduleReconciliationDraft(section)"
+                    />
+                  </el-form-item>
+                </div>
+                <h4 class="reconciliation-subtitle">实际盘点</h4>
                 <div class="reconciliation-grid">
                   <el-form-item v-for="field in section.fields" :key="field" :label="reconciliationLabels[field]">
                     <el-input-number

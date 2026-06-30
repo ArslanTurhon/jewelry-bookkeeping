@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\AdminUser;
+use Illuminate\Validation\ValidationException;
 
 class ReconciliationService
 {
@@ -56,6 +57,58 @@ class ReconciliationService
                 'scrap_gold_wrapped_silver_gold_weight', 'scrap_gold_wrapped_silver_silver_weight',
                 'scrap_gold_wrapped_silver_pieces',
             ];
+    }
+
+    public function businessSummaryFields(string $sectionType): array
+    {
+        return $sectionType === 'pure_gold'
+            ? ['recycle_amount', 'recycle_pure_gold_weight', 'recycle_pure_gold_pieces']
+            : [
+                'sales_amount',
+                'sales_cash', 'sales_wechat', 'sales_alipay', 'sales_bank',
+                'sales_pure_gold_weight', 'sales_pure_gold_pieces',
+                'sales_pure_silver_weight', 'sales_pure_silver_pieces',
+                'sales_gold_wrapped_gold_weight', 'sales_gold_wrapped_silver_weight', 'sales_gold_wrapped_pieces',
+                'recycle_amount',
+                'recycle_cash', 'recycle_wechat', 'recycle_alipay', 'recycle_bank',
+                'recycle_pure_silver_weight', 'recycle_pure_silver_pieces',
+                'recycle_gold_wrapped_gold_weight', 'recycle_gold_wrapped_silver_weight', 'recycle_gold_wrapped_pieces',
+            ];
+    }
+
+    public function validateBusinessSummary(string $sectionType, bool $noBusiness, array $summary): void
+    {
+        if ($noBusiness) {
+            if (collect($summary)->contains(fn ($value) => (float) $value !== 0.0)) {
+                throw ValidationException::withMessages(['business_summary' => '选择今日无业务后，业务合计必须为零']);
+            }
+
+            return;
+        }
+
+        $fields = $this->businessSummaryFields($sectionType);
+        if (array_diff($fields, array_keys($summary)) || array_diff(array_keys($summary), $fields)) {
+            throw ValidationException::withMessages(['business_summary' => '业务合计项目不完整']);
+        }
+        foreach ($summary as $value) {
+            if (! is_numeric($value) || (float) $value < 0) {
+                throw ValidationException::withMessages(['business_summary' => '业务合计只能填写零或正数']);
+            }
+        }
+        if ($sectionType === 'general') {
+            $salesPayments = collect(['sales_cash', 'sales_wechat', 'sales_alipay', 'sales_bank'])->sum(
+                fn (string $field) => (float) $summary[$field],
+            );
+            $recyclePayments = collect(['recycle_cash', 'recycle_wechat', 'recycle_alipay', 'recycle_bank'])->sum(
+                fn (string $field) => (float) $summary[$field],
+            );
+            if (abs($salesPayments - (float) $summary['sales_amount']) > 0.009) {
+                throw ValidationException::withMessages(['business_summary' => '销售收款合计必须等于销售总额']);
+            }
+            if (abs($recyclePayments - (float) $summary['recycle_amount']) > 0.009) {
+                throw ValidationException::withMessages(['business_summary' => '回收付款合计必须等于回收总额']);
+            }
+        }
     }
 
     public function snapshot(int $storeId, string $sectionType): array

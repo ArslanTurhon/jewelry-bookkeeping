@@ -11,6 +11,7 @@ use App\Models\Store;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\AuditLogger;
+use App\Support\ReconciliationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
@@ -982,6 +983,73 @@ class FinanceApiTest extends TestCase
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.store.id', $store->id)
             ->assertJsonPath('data.0.sections.0.submitted_by', null);
+    }
+
+    public function test_reconciliation_business_summary_requires_complete_balanced_totals(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '合计员工',
+            'username' => 'summary-staff',
+            'email' => 'summary-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'summary-staff-token',
+        ]);
+        $snapshot = app(ReconciliationService::class)->snapshot($store->id, 'general');
+        $summary = [
+            'sales_amount' => 1000,
+            'sales_cash' => 400,
+            'sales_wechat' => 300,
+            'sales_alipay' => 200,
+            'sales_bank' => 100,
+            'sales_pure_gold_weight' => 1,
+            'sales_pure_gold_pieces' => 1,
+            'sales_pure_silver_weight' => 2,
+            'sales_pure_silver_pieces' => 1,
+            'sales_gold_wrapped_gold_weight' => 0.5,
+            'sales_gold_wrapped_silver_weight' => 4,
+            'sales_gold_wrapped_pieces' => 1,
+            'recycle_amount' => 200,
+            'recycle_cash' => 100,
+            'recycle_wechat' => 100,
+            'recycle_alipay' => 0,
+            'recycle_bank' => 0,
+            'recycle_pure_silver_weight' => 5,
+            'recycle_pure_silver_pieces' => 1,
+            'recycle_gold_wrapped_gold_weight' => 0,
+            'recycle_gold_wrapped_silver_weight' => 0,
+            'recycle_gold_wrapped_pieces' => 0,
+        ];
+        $payload = [
+            'no_business' => false,
+            'business_summary' => $summary,
+            'actual_snapshot' => $snapshot,
+        ];
+
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', array_replace($payload, [
+                'business_summary' => array_diff_key($summary, ['sales_bank' => true]),
+            ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('business_summary');
+
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', array_replace($payload, [
+                'business_summary' => array_replace($summary, ['sales_cash' => 399]),
+            ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('business_summary');
+
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', $payload)
+            ->assertCreated()
+            ->assertJsonPath('business_summary.sales_amount', 1000)
+            ->assertJsonPath('business_summary.recycle_amount', 200);
     }
 
     public function test_owner_sees_pending_reports_before_staff_open_the_page(): void

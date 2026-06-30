@@ -27,7 +27,10 @@ class ReconciliationController extends Controller
         $sections = collect($service->allowedSections($admin))->map(function (string $type) use ($report, $service): array {
             $section = $report->sections()->firstOrCreate(['section_type' => $type]);
 
-            return $this->presentSection($section, false) + ['fields' => $service->fieldDefinitions($type)];
+            return $this->presentSection($section, false) + [
+                'fields' => $service->fieldDefinitions($type),
+                'business_summary_fields' => $service->businessSummaryFields($type),
+            ];
         });
 
         return response()->json([
@@ -92,9 +95,15 @@ class ReconciliationController extends Controller
         $data = $request->validate([
             'no_business' => ['required', 'boolean'],
             'business_summary' => ['nullable', 'array'],
+            'business_summary.*' => ['numeric', 'min:0'],
             'actual_snapshot' => ['required', 'array'],
             'difference_reason' => ['nullable', 'string', 'max:500'],
         ]);
+        $service->validateBusinessSummary(
+            $sectionType,
+            $data['no_business'],
+            $data['business_summary'] ?? [],
+        );
         $fields = $service->fieldDefinitions($sectionType);
         if (array_diff($fields, array_keys($data['actual_snapshot'])) || array_diff(array_keys($data['actual_snapshot']), $fields)) {
             throw ValidationException::withMessages(['actual_snapshot' => '盘点项目不完整']);
