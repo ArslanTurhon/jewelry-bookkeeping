@@ -8,6 +8,7 @@ use App\Models\DailyReconciliation;
 use App\Models\Exchange;
 use App\Models\OpeningBalance;
 use App\Models\ReconciliationSection;
+use App\Models\ScrapOutbound;
 use App\Models\Store;
 use App\Models\Transaction;
 use App\Models\User;
@@ -240,6 +241,102 @@ class FinanceApiTest extends TestCase
         $this->withToken($staff->api_token)
             ->postJson('/api/admin/exchanges', array_replace($payload, ['online_method' => null]))
             ->assertStatus(422);
+    }
+
+    public function test_owner_scrap_outbound_reduces_stock_routes_funds_and_calculates_profit(): void
+    {
+        Carbon::setTestNow('2026-07-01 12:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'pure_gold_fund')->update(['value' => 1000]);
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'outbound-owner-token'])->save();
+        $user = User::query()->firstOrCreate(
+            ['openid' => 'outbound-user'],
+            ['name' => '出库测试', 'api_token' => 'outbound-user-token'],
+        );
+        Transaction::query()->create([
+            'store_id' => $store->id,
+            'user_id' => $user->id,
+            'recorded_by_admin_id' => $owner->id,
+            'business_type' => 'recycle',
+            'payment_account' => 'pure_gold_fund',
+            'amount' => 2500,
+            'stock_bucket' => 'scrap_stock',
+            'product_type' => 'pure_gold',
+            'pure_gold_weight' => 5,
+            'material_pieces' => 2,
+            'transaction_date' => '2026-07-01',
+        ]);
+
+        $this->withToken($owner->api_token)->postJson('/api/admin/scrap-outbounds', [
+            'product_type' => 'pure_gold',
+            'pure_gold_weight' => 2,
+            'material_pieces' => 1,
+            'gross_amount' => 1300,
+            'received_amount' => 1280,
+            'payment_account' => 'pure_gold_fund',
+            'fees' => [
+                ['category' => 'refining', 'amount' => 20, 'payment_account' => 'deducted'],
+            ],
+            'outbound_date' => '2026-07-01',
+        ])->assertCreated()
+            ->assertJsonPath('cost_amount', '1000.00')
+            ->assertJsonPath('profit_amount', '280.00');
+
+        $this->assertDatabaseCount('scrap_outbounds', 1);
+        $this->assertSame(1000.0, (float) ScrapOutbound::query()->sole()->cost_amount);
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/stats/current?month=2026-07')
+            ->assertOk()
+            ->assertJsonPath('pure_gold_fund', -220)
+            ->assertJsonPath('stock.scrap_stock.products.pure_gold.pure_gold_weight', 3);
+    }
+
+    public function test_scrap_outbound_rejects_excess_stock_and_hides_cost_from_authorized_staff(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '出库员工',
+            'username' => 'outbound-staff',
+            'email' => 'outbound-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['scrap_outbound'],
+            'api_token' => 'outbound-staff-token',
+        ]);
+        $payload = [
+            'product_type' => 'pure_silver',
+            'material_weight' => 1,
+            'material_pieces' => 1,
+            'gross_amount' => 100,
+            'received_amount' => 100,
+            'payment_account' => 'cash',
+            'fees' => [],
+            'outbound_date' => '2026-07-01',
+        ];
+
+        $this->withToken($staff->api_token)->postJson('/api/admin/scrap-outbounds', $payload)->assertStatus(422);
+        OpeningBalance::query()
+            ->where('store_id', $store->id)
+            ->where('key', 'scrap_stock.pure_silver.silver_weight')
+            ->update(['value' => 2]);
+        OpeningBalance::query()
+            ->where('store_id', $store->id)
+            ->where('key', 'scrap_stock.pure_silver.pieces')
+            ->update(['value' => 2]);
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/scrap-outbounds', $payload)
+            ->assertCreated()
+            ->assertJsonMissingPath('cost_amount')
+            ->assertJsonMissingPath('profit_amount');
+        $this->withToken($staff->api_token)
+            ->getJson('/api/admin/scrap-outbounds')
+            ->assertOk()
+            ->assertJsonMissingPath('data.0.cost_amount')
+            ->assertJsonMissingPath('data.0.profit_amount');
     }
 
     public function test_admin_can_record_pure_gold_recycle_with_fund_and_unit_prices(): void

@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\Admin\I18nController as AdminI18nController;
 use App\Http\Controllers\Api\Admin\OpeningBalanceController as AdminOpeningBalanceController;
 use App\Http\Controllers\Api\Admin\ReconciliationController as AdminReconciliationController;
 use App\Http\Controllers\Api\Admin\RecyclePriceController as AdminRecyclePriceController;
+use App\Http\Controllers\Api\Admin\ScrapOutboundController as AdminScrapOutboundController;
 use App\Http\Controllers\Api\Admin\StoreController as AdminStoreController;
 use App\Http\Controllers\Api\Admin\TransactionController as AdminTransactionController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
@@ -51,6 +52,8 @@ Route::prefix('admin')->group(function (): void {
     Route::delete('transactions/{transaction}', [AdminTransactionController::class, 'destroy']);
     Route::get('exchanges', [AdminExchangeController::class, 'index']);
     Route::post('exchanges', [AdminExchangeController::class, 'store']);
+    Route::get('scrap-outbounds', [AdminScrapOutboundController::class, 'index']);
+    Route::post('scrap-outbounds', [AdminScrapOutboundController::class, 'store']);
     Route::get('account-details', [AdminTransactionController::class, 'accountDetails']);
     Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
     Route::get('reconciliations/today', [AdminReconciliationController::class, 'today']);

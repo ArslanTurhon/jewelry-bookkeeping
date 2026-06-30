@@ -14,6 +14,7 @@ class AdminUser extends Authenticatable
         'recycle_gold_wrapped' => '金包银回收',
         'opening' => '期初',
         'recycle_price' => '参考价',
+        'scrap_outbound' => '旧料出库',
         'users' => '用户管理',
     ];
 

@@ -452,6 +452,14 @@ body {
   margin: 0;
 }
 
+.fee-row {
+  display: grid;
+  grid-template-columns: 90px minmax(130px, 1fr) minmax(130px, 1fr) minmax(120px, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 @media (max-width: 900px) {
   body {
     overflow: auto;
@@ -622,6 +630,12 @@ body {
 
   .trend-chart {
     height: 260px;
+  }
+
+  .fee-row {
+    grid-template-columns: 1fr;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e6eaf0;
   }
 }
 

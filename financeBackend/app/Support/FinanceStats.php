@@ -7,6 +7,7 @@ use App\Models\DailyReconciliation;
 use App\Models\Exchange;
 use App\Models\OpeningBalance;
 use App\Models\ReconciliationSection;
+use App\Models\ScrapOutbound;
 use App\Models\Store;
 use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
@@ -64,6 +65,9 @@ class FinanceStats
         $monthlyExchanges = $exchanges->filter(
             fn (Exchange $exchange) => ! $month || str_starts_with($exchange->exchange_date->format('Y-m-d'), $month),
         );
+        $outbounds = ScrapOutbound::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->get();
 
         $cash = $this->opening('cash', $storeId);
         $pureGoldFund = $this->opening('pure_gold_fund', $storeId);
@@ -114,6 +118,26 @@ class FinanceStats
             } elseif ($record->business_type === 'recycle') {
                 $this->applyStock($stock, $record, 1);
                 $this->applyRecycleCost($recycleCost, $record);
+            }
+        }
+
+        foreach ($outbounds as $outbound) {
+            $this->applyOutboundStock($stock, $outbound);
+            $this->applyOutboundCost($recycleCost, $outbound);
+            $received = (float) $outbound->received_amount;
+            if ($outbound->payment_account === 'cash') {
+                $cash += $received;
+            } elseif ($outbound->payment_account === 'pure_gold_fund') {
+                $pureGoldFund += $received;
+            } elseif ($outbound->payment_account === 'online' && $outbound->online_method) {
+                $online[$outbound->online_method] += $received;
+            }
+            foreach ($outbound->fees ?? [] as $fee) {
+                if (($fee['payment_account'] ?? null) === 'cash') {
+                    $cash -= (float) $fee['amount'];
+                } elseif (($fee['payment_account'] ?? null) === 'online' && ! empty($fee['online_method'])) {
+                    $online[$fee['online_method']] -= (float) $fee['amount'];
+                }
             }
         }
 
@@ -350,7 +374,9 @@ class FinanceStats
     {
         return [
             'pure_gold' => ['amount' => 0, 'pure_gold_weight' => 0],
+            'pure_silver' => ['amount' => 0, 'silver_weight' => 0],
             'gold_wrapped_silver' => ['amount' => 0, 'wrapped_gold_weight' => 0, 'silver_weight' => 0],
+            'gold_wrapped_copper' => ['amount' => 0, 'wrapped_gold_weight' => 0, 'copper_weight' => 0],
         ];
     }
 
@@ -361,18 +387,67 @@ class FinanceStats
             $cost['pure_gold']['pure_gold_weight'] += (float) $record->pure_gold_weight;
         }
 
-        if ($record->product_type === 'gold_wrapped' && $record->wrap_material === 'silver') {
-            $cost['gold_wrapped_silver']['amount'] += (float) $record->amount;
-            $cost['gold_wrapped_silver']['wrapped_gold_weight'] += (float) $record->wrapped_gold_weight;
-            $cost['gold_wrapped_silver']['silver_weight'] += (float) $record->material_weight;
+        if ($record->product_type === 'pure_silver') {
+            $cost['pure_silver']['amount'] += (float) $record->amount;
+            $cost['pure_silver']['silver_weight'] += (float) $record->material_weight;
+        }
+
+        if ($record->product_type === 'gold_wrapped') {
+            $key = $record->wrap_material === 'copper' ? 'gold_wrapped_copper' : 'gold_wrapped_silver';
+            $material = $record->wrap_material === 'copper' ? 'copper_weight' : 'silver_weight';
+            $cost[$key]['amount'] += (float) $record->amount;
+            $cost[$key]['wrapped_gold_weight'] += (float) $record->wrapped_gold_weight;
+            $cost[$key][$material] += (float) $record->material_weight;
+        }
+    }
+
+    private function applyOutboundStock(array &$stock, ScrapOutbound $outbound): void
+    {
+        $product = match ($outbound->product_type) {
+            'pure_gold' => 'pure_gold',
+            'pure_silver' => 'pure_silver',
+            default => $outbound->wrap_material === 'copper' ? 'gold_wrapped_copper' : 'gold_wrapped_silver',
+        };
+        $bucket = &$stock['scrap_stock']['products'][$product];
+        if ($outbound->product_type === 'pure_gold') {
+            $bucket['pure_gold_weight'] -= (float) $outbound->pure_gold_weight;
+        } elseif ($outbound->product_type === 'pure_silver') {
+            $bucket['silver_weight'] -= (float) $outbound->material_weight;
+        } else {
+            $bucket['wrapped_gold_weight'] -= (float) $outbound->wrapped_gold_weight;
+            $material = $outbound->wrap_material === 'copper' ? 'copper_weight' : 'silver_weight';
+            $bucket[$material] -= (float) $outbound->material_weight;
+        }
+        $bucket['pieces'] -= (int) $outbound->material_pieces;
+    }
+
+    private function applyOutboundCost(array &$cost, ScrapOutbound $outbound): void
+    {
+        $key = match ($outbound->product_type) {
+            'pure_gold' => 'pure_gold',
+            'pure_silver' => 'pure_silver',
+            default => $outbound->wrap_material === 'copper' ? 'gold_wrapped_copper' : 'gold_wrapped_silver',
+        };
+        $cost[$key]['amount'] -= (float) $outbound->cost_amount;
+        if ($outbound->product_type === 'pure_gold') {
+            $cost[$key]['pure_gold_weight'] -= (float) $outbound->pure_gold_weight;
+        } elseif ($outbound->product_type === 'pure_silver') {
+            $cost[$key]['silver_weight'] -= (float) $outbound->material_weight;
+        } else {
+            $cost[$key]['wrapped_gold_weight'] -= (float) $outbound->wrapped_gold_weight;
+            $material = $outbound->wrap_material === 'copper' ? 'copper_weight' : 'silver_weight';
+            $cost[$key][$material] -= (float) $outbound->material_weight;
         }
     }
 
     private function roundedRecycleCost(array $cost): array
     {
         $goldWeight = $cost['pure_gold']['pure_gold_weight'];
+        $pureSilverWeight = $cost['pure_silver']['silver_weight'];
         $wrappedGoldWeight = $cost['gold_wrapped_silver']['wrapped_gold_weight'];
         $silverWeight = $cost['gold_wrapped_silver']['silver_weight'];
+        $copperGoldWeight = $cost['gold_wrapped_copper']['wrapped_gold_weight'];
+        $copperWeight = $cost['gold_wrapped_copper']['copper_weight'];
 
         return [
             'pure_gold' => [
@@ -380,12 +455,24 @@ class FinanceStats
                 'pure_gold_weight' => round($goldWeight, 3),
                 'average_gold_price' => $goldWeight > 0 ? round($cost['pure_gold']['amount'] / $goldWeight, 2) : 0,
             ],
+            'pure_silver' => [
+                'amount' => round($cost['pure_silver']['amount'], 2),
+                'silver_weight' => round($pureSilverWeight, 3),
+                'average_silver_price' => $pureSilverWeight > 0 ? round($cost['pure_silver']['amount'] / $pureSilverWeight, 2) : 0,
+            ],
             'gold_wrapped_silver' => [
                 'amount' => round($cost['gold_wrapped_silver']['amount'], 2),
                 'wrapped_gold_weight' => round($wrappedGoldWeight, 3),
                 'silver_weight' => round($silverWeight, 3),
                 'average_total_price_per_gold_gram' => $wrappedGoldWeight > 0 ? round($cost['gold_wrapped_silver']['amount'] / $wrappedGoldWeight, 2) : 0,
                 'average_total_price_per_material_gram' => $silverWeight > 0 ? round($cost['gold_wrapped_silver']['amount'] / $silverWeight, 2) : 0,
+            ],
+            'gold_wrapped_copper' => [
+                'amount' => round($cost['gold_wrapped_copper']['amount'], 2),
+                'wrapped_gold_weight' => round($copperGoldWeight, 3),
+                'copper_weight' => round($copperWeight, 3),
+                'average_total_price_per_gold_gram' => $copperGoldWeight > 0 ? round($cost['gold_wrapped_copper']['amount'] / $copperGoldWeight, 2) : 0,
+                'average_total_price_per_material_gram' => $copperWeight > 0 ? round($cost['gold_wrapped_copper']['amount'] / $copperWeight, 2) : 0,
             ],
         ];
     }

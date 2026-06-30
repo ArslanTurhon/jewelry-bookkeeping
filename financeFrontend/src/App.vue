@@ -24,6 +24,9 @@ const transactions = ref([])
 const exchanges = ref([])
 const exchangeDialog = ref(false)
 const exchangeForm = reactive(defaultExchangeForm())
+const scrapOutbounds = ref([])
+const scrapOutboundDialog = ref(false)
+const scrapOutboundForm = reactive(defaultScrapOutboundForm())
 const opening = ref({})
 const accountDrawer = ref(false)
 const accountDetail = ref({ entries: [] })
@@ -78,11 +81,20 @@ const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUs
 const canUseTransactions = computed(() => hasPermission('transactions') || hasPermission('recycle_pure_gold') || hasPermission('recycle_gold_wrapped'))
 const hasPendingReconciliation = computed(() => reconciliationToday.value.sections?.some((section) => ['draft', 'returned'].includes(section.status)))
 const canEditTransactions = computed(() => Boolean(adminUser.value?.is_super_admin))
+const outboundAuthorized = computed({
+  get: () => userForm.permissions.includes('scrap_outbound'),
+  set: (enabled) => {
+    userForm.permissions = enabled
+      ? [...new Set([...userForm.permissions, 'scrap_outbound'])]
+      : userForm.permissions.filter((permission) => permission !== 'scrap_outbound')
+  },
+})
 const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || selectedStoreId.value !== 'all')
 const visibleMenus = computed(() => [
   { key: 'dashboard', label: '首页', icon: Wallet, visible: Boolean(adminUser.value?.is_super_admin) },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
   { key: 'exchanges', label: '换现', icon: CreditCard, visible: hasPermission('transactions') },
+  { key: 'scrap_outbounds', label: '旧料出库', icon: Coin, visible: hasPermission('scrap_outbound') },
   { key: 'reconciliation', label: adminUser.value?.is_super_admin ? '每日交账' : '今日交账', icon: Check, visible: canUseTransactions.value },
   { key: 'opening', label: '期初', icon: Coin },
   { key: 'users', label: '用户管理', icon: User },
@@ -237,6 +249,29 @@ function defaultExchangeForm() {
   }
 }
 
+function defaultScrapOutboundForm() {
+  return {
+    product_type: 'pure_gold',
+    wrap_material: 'silver',
+    pure_gold_weight: 0,
+    wrapped_gold_weight: 0,
+    material_weight: 0,
+    material_pieces: 0,
+    gross_amount: 0,
+    received_amount: 0,
+    payment_account: 'pure_gold_fund',
+    online_method: '',
+    outbound_date: today(),
+    remark: '',
+    fees: [
+      { category: 'processing', amount: 0, payment_account: 'deducted', online_method: '' },
+      { category: 'refining', amount: 0, payment_account: 'deducted', online_method: '' },
+      { category: 'transport', amount: 0, payment_account: 'deducted', online_method: '' },
+      { category: 'other', amount: 0, payment_account: 'deducted', online_method: '' },
+    ],
+  }
+}
+
 function defaultUserForm() {
   return {
     name: '',
@@ -291,6 +326,7 @@ async function loadAll() {
   if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('transactions')) tasks.push(loadExchanges())
+  if (hasPermission('scrap_outbound')) tasks.push(loadScrapOutbounds())
   if (hasPermission('opening')) tasks.push(loadOpening())
   if (hasPermission('recycle_price')) tasks.push(loadRecyclePrice(today()))
   if (hasPermission('users')) tasks.push(loadUsers(), loadPermissionOptions())
@@ -436,6 +472,37 @@ async function loadExchanges() {
   exchanges.value = data.data || []
 }
 
+async function loadScrapOutbounds() {
+  const { data } = await api.get('/admin/scrap-outbounds', {
+    params: { store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value, per_page: 50 },
+  })
+  scrapOutbounds.value = data.data || []
+}
+
+function openScrapOutbound() {
+  Object.assign(scrapOutboundForm, defaultScrapOutboundForm())
+  scrapOutboundDialog.value = true
+}
+
+function changeOutboundProduct(product) {
+  scrapOutboundForm.payment_account = product === 'pure_gold' ? 'pure_gold_fund' : 'cash'
+}
+
+async function saveScrapOutbound() {
+  try {
+    await api.post('/admin/scrap-outbounds', {
+      ...scrapOutboundForm,
+      store_id: selectedStoreId.value === 'all' ? null : selectedStoreId.value,
+      fees: scrapOutboundForm.fees.filter((fee) => Number(fee.amount) > 0),
+    })
+    scrapOutboundDialog.value = false
+    await Promise.all([loadScrapOutbounds(), adminUser.value?.is_super_admin ? loadStats() : Promise.resolve()])
+    ElMessage.success('旧料出库已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '旧料出库保存失败')
+  }
+}
+
 function openExchange() {
   Object.assign(exchangeForm, defaultExchangeForm())
   exchangeDialog.value = true
@@ -494,6 +561,7 @@ async function refresh() {
   if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('transactions')) tasks.push(loadExchanges())
+  if (hasPermission('scrap_outbound')) tasks.push(loadScrapOutbounds())
   if (hasPermission('users')) tasks.push(loadUsers())
   if (adminUser.value?.is_super_admin && activeMenu.value === 'audit') tasks.push(loadAuditLogs())
   if (activeMenu.value === 'reconciliation') tasks.push(loadReconciliations())
@@ -505,6 +573,7 @@ async function selectMenu(key) {
   mobileMenu.value = false
   if (key === 'audit') await loadAuditLogs()
   if (key === 'exchanges') await loadExchanges()
+  if (key === 'scrap_outbounds') await loadScrapOutbounds()
   if (key === 'reconciliation') await loadReconciliations()
 }
 
@@ -740,7 +809,8 @@ function detectUserRole(permissions) {
 }
 
 function applyUserRole(role) {
-  userForm.permissions = [...rolePresets[role]]
+  const keepOutbound = userForm.permissions.includes('scrap_outbound')
+  userForm.permissions = [...rolePresets[role], ...(keepOutbound ? ['scrap_outbound'] : [])]
 }
 
 async function saveUser() {
@@ -1183,6 +1253,37 @@ onBeforeUnmount(() => trendChart?.dispose())
           </section>
         </el-main>
 
+        <el-main v-if="activeMenu === 'scrap_outbounds'">
+          <section class="tool-section">
+            <div class="card-header">
+              <div>
+                <h3>旧料出库</h3>
+                <p class="muted">出库后库存和实际到账同步更新。</p>
+              </div>
+              <el-button type="primary" :icon="Plus" :disabled="!canWriteCurrentStore" @click="openScrapOutbound">新增出库</el-button>
+            </div>
+            <div class="table-scroll section">
+              <el-table :data="scrapOutbounds" stripe border>
+                <el-table-column prop="outbound_date" label="日期" width="120" />
+                <el-table-column label="旧料" width="130">
+                  <template #default="{ row }">{{ row.product_type === 'pure_gold' ? '纯金' : row.product_type === 'pure_silver' ? '纯银' : row.wrap_material === 'copper' ? '金包铜' : '金包银' }}</template>
+                </el-table-column>
+                <el-table-column label="重量" min-width="180">
+                  <template #default="{ row }">
+                    {{ row.product_type === 'pure_gold' ? `${row.pure_gold_weight}g` : row.product_type === 'pure_silver' ? `${row.material_weight}g` : `金${row.wrapped_gold_weight}g / 材料${row.material_weight}g` }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="卖出总价" width="130"><template #default="{ row }">¥{{ formatMoney(row.gross_amount) }}</template></el-table-column>
+                <el-table-column label="实际到账" width="130"><template #default="{ row }">¥{{ formatMoney(row.received_amount) }}</template></el-table-column>
+                <el-table-column v-if="adminUser?.is_super_admin" label="原回收成本" width="140"><template #default="{ row }">¥{{ formatMoney(row.cost_amount) }}</template></el-table-column>
+                <el-table-column v-if="adminUser?.is_super_admin" label="最终利润" width="130"><template #default="{ row }">¥{{ formatMoney(row.profit_amount) }}</template></el-table-column>
+                <el-table-column prop="recorder.name" label="经手人" width="130" />
+                <el-table-column prop="remark" label="备注" min-width="150" />
+              </el-table>
+            </div>
+          </section>
+        </el-main>
+
         <el-main v-if="activeMenu === 'reconciliation'" v-loading="reconciliationLoading">
           <template v-if="!adminUser?.is_super_admin">
             <el-alert
@@ -1526,6 +1627,63 @@ onBeforeUnmount(() => trendChart?.dispose())
       </template>
     </el-dialog>
 
+    <el-dialog v-model="scrapOutboundDialog" title="新增旧料出库" width="min(96vw, 760px)" class="responsive-dialog">
+      <el-form :model="scrapOutboundForm" label-width="120px" class="responsive-form">
+        <el-row :gutter="12">
+          <el-col :xs="24" :md="8">
+            <el-form-item label="旧料种类">
+              <el-select v-model="scrapOutboundForm.product_type" @change="changeOutboundProduct">
+                <el-option label="纯金" value="pure_gold" />
+                <el-option label="纯银" value="pure_silver" />
+                <el-option label="金包银/铜" value="gold_wrapped" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="scrapOutboundForm.product_type === 'gold_wrapped'" :xs="24" :md="8">
+            <el-form-item label="包裹材料">
+              <el-select v-model="scrapOutboundForm.wrap_material"><el-option label="银" value="silver" /><el-option label="铜" value="copper" /></el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :md="8"><el-form-item label="件数"><el-input-number v-model="scrapOutboundForm.material_pieces" :min="0" :precision="0" /></el-form-item></el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col v-if="scrapOutboundForm.product_type === 'pure_gold'" :xs="24" :md="8"><el-form-item label="纯金克重"><el-input-number v-model="scrapOutboundForm.pure_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
+          <el-col v-if="scrapOutboundForm.product_type === 'gold_wrapped'" :xs="24" :md="8"><el-form-item label="金重"><el-input-number v-model="scrapOutboundForm.wrapped_gold_weight" :min="0" :precision="3" /></el-form-item></el-col>
+          <el-col v-if="scrapOutboundForm.product_type !== 'pure_gold'" :xs="24" :md="8"><el-form-item label="材料克重"><el-input-number v-model="scrapOutboundForm.material_weight" :min="0" :precision="3" /></el-form-item></el-col>
+        </el-row>
+        <el-divider content-position="left">卖出与到账</el-divider>
+        <el-row :gutter="12">
+          <el-col :xs="24" :md="8"><el-form-item label="卖出总价"><el-input-number v-model="scrapOutboundForm.gross_amount" :min="0" :precision="2" /></el-form-item></el-col>
+          <el-col :xs="24" :md="8"><el-form-item label="实际到账"><el-input-number v-model="scrapOutboundForm.received_amount" :min="0" :precision="2" /></el-form-item></el-col>
+          <el-col :xs="24" :md="8">
+            <el-form-item label="到账账户">
+              <el-select v-model="scrapOutboundForm.payment_account" :disabled="scrapOutboundForm.product_type === 'pure_gold'">
+                <el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="纯金专用资金" value="pure_gold_fund" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="scrapOutboundForm.payment_account === 'online'" :xs="24" :md="8">
+            <el-form-item label="线上账户"><el-select v-model="scrapOutboundForm.online_method"><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /><el-option label="银行卡" value="bank" /></el-select></el-form-item>
+          </el-col>
+        </el-row>
+        <el-divider content-position="left">直接费用</el-divider>
+        <div v-for="fee in scrapOutboundForm.fees" :key="fee.category" class="fee-row">
+          <strong>{{ { processing: '加工费', refining: '提纯费', transport: '运输费', other: '其他费用' }[fee.category] }}</strong>
+          <el-input-number v-model="fee.amount" :min="0" :precision="2" />
+          <el-select v-model="fee.payment_account">
+            <el-option label="买方扣除" value="deducted" /><el-option label="现金另付" value="cash" /><el-option label="线上另付" value="online" />
+          </el-select>
+          <el-select v-if="fee.payment_account === 'online'" v-model="fee.online_method"><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /><el-option label="银行卡" value="bank" /></el-select>
+        </div>
+        <el-form-item label="出库日期"><el-date-picker v-model="scrapOutboundForm.outbound_date" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="scrapOutboundForm.remark" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="scrapOutboundDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveScrapOutbound">保存出库</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="transactionDialog" title="流水录入" width="min(94vw, 760px)" class="responsive-dialog">
       <el-form :model="form" label-width="110px" class="responsive-form">
         <el-row :gutter="12">
@@ -1658,6 +1816,7 @@ onBeforeUnmount(() => trendChart?.dispose())
             <el-radio-button value="all_business">全店业务</el-radio-button>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="额外授权"><el-checkbox v-model="outboundAuthorized">允许旧料出库</el-checkbox></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="userDialog = false">取消</el-button>
