@@ -378,6 +378,59 @@ body {
   color: #c2413b;
 }
 
+.anomaly-band {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid #efc9c6;
+  border-radius: 8px;
+  background: #fff8f7;
+}
+
+.anomaly-metric {
+  display: flex;
+  min-width: 0;
+  padding: 18px 20px;
+  border: 0;
+  border-right: 1px solid #efc9c6;
+  background: transparent;
+  color: #652c29;
+  cursor: pointer;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.anomaly-metric:last-child {
+  border-right: 0;
+}
+
+.anomaly-metric strong {
+  font-size: 24px;
+}
+
+.trend-section {
+  padding: 20px;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.section-heading h3,
+.section-heading p {
+  margin: 0;
+}
+
+.section-heading p {
+  margin-top: 4px;
+  color: #69768c;
+}
+
+.trend-chart {
+  width: 100%;
+  height: 320px;
+}
+
 @media (max-width: 900px) {
   body {
     overflow: auto;
@@ -532,6 +585,22 @@ body {
   .reconciliation-actions .el-button {
     width: 100%;
     margin-left: 0;
+  }
+
+  .anomaly-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .anomaly-metric:nth-child(2) {
+    border-right: 0;
+  }
+
+  .anomaly-metric:nth-child(-n + 2) {
+    border-bottom: 1px solid #efc9c6;
+  }
+
+  .trend-chart {
+    height: 260px;
   }
 }
 

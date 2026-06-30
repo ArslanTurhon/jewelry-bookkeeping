@@ -204,6 +204,61 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('recycle_cost.pure_gold.average_gold_price', 516);
     }
 
+    public function test_owner_dashboard_includes_anomalies_today_totals_and_seven_day_trend(): void
+    {
+        Carbon::setTestNow('2026-07-01 12:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'dashboard-owner-token'])->save();
+        $user = User::query()->firstOrCreate(
+            ['openid' => 'dashboard-user'],
+            ['name' => '首页测试', 'api_token' => 'dashboard-user-token'],
+        );
+
+        foreach ([
+            ['business_type' => 'sale', 'amount' => 1000, 'transaction_date' => '2026-06-29'],
+            ['business_type' => 'recycle', 'amount' => 400, 'transaction_date' => '2026-06-30'],
+            ['business_type' => 'sale', 'amount' => 1500, 'transaction_date' => '2026-07-01'],
+            ['business_type' => 'recycle', 'amount' => 500, 'transaction_date' => '2026-07-01'],
+            ['business_type' => 'operating_expense', 'amount' => 80, 'transaction_date' => '2026-07-01'],
+        ] as $record) {
+            Transaction::query()->create($record + [
+                'store_id' => $store->id,
+                'user_id' => $user->id,
+                'payment_account' => 'cash',
+                'material_pieces' => 0,
+            ]);
+        }
+
+        $report = DailyReconciliation::query()->create([
+            'store_id' => $store->id,
+            'reconciliation_date' => '2026-07-01',
+            'status' => 'returned',
+            'required_sections' => ['general'],
+        ]);
+        $report->sections()->create([
+            'section_type' => 'general',
+            'status' => 'returned',
+            'differences' => ['cash' => -20, 'sale_pure_gold_weight' => 1.5],
+        ]);
+
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/stats/current?month=2026-07')
+            ->assertOk()
+            ->assertJsonPath('today.sales', 1500)
+            ->assertJsonPath('today.recycle', 500)
+            ->assertJsonPath('today.operating_expenses', 80)
+            ->assertJsonPath('anomalies.returned', 1)
+            ->assertJsonPath('anomalies.cash_difference', 20)
+            ->assertJsonPath('anomalies.metal_difference', 1.5)
+            ->assertJsonCount(7, 'trend_7_days')
+            ->assertJsonPath('trend_7_days.4.sales', 1000)
+            ->assertJsonPath('trend_7_days.5.recycle', 400)
+            ->assertJsonPath('trend_7_days.6.sales', 1500)
+            ->assertJsonPath('trend_7_days.6.recycle', 500);
+    }
+
     public function test_admin_transactions_default_to_50_per_page_and_filter_by_date_range(): void
     {
         $this->seed();

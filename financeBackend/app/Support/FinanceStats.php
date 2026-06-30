@@ -2,7 +2,10 @@
 
 namespace App\Support;
 
+use App\Models\AdminUser;
+use App\Models\DailyReconciliation;
 use App\Models\OpeningBalance;
+use App\Models\ReconciliationSection;
 use App\Models\Store;
 use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
@@ -101,6 +104,7 @@ class FinanceStats
         $monthlyExpenses = (float) $monthly->where('business_type', 'operating_expense')->sum('amount');
         $onlineTotal = array_sum($online);
         $total = $cash + $onlineTotal + $pureGoldFund;
+        $dashboard = $this->dashboardSummary($records, $storeId);
 
         return [
             'cash' => round($cash, 2),
@@ -122,6 +126,69 @@ class FinanceStats
                 'operating_expenses' => round($monthlyExpenses, 2),
                 'net' => round($monthlySales + $monthlyIncome - $monthlyRecycle - $monthlyExpenses, 2),
             ],
+            ...$dashboard,
+        ];
+    }
+
+    private function dashboardSummary($records, ?int $storeId): array
+    {
+        $today = now('Asia/Shanghai')->toDateString();
+        $start = now('Asia/Shanghai')->subDays(6)->startOfDay();
+        $todayRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->format('Y-m-d') === $today);
+        $trendRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->gte($start));
+        $reports = DailyReconciliation::query()
+            ->whereDate('reconciliation_date', $today)
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->get();
+        $storeIds = AdminUser::query()
+            ->where('enabled', true)
+            ->where('is_super_admin', false)
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->get()
+            ->filter(fn (AdminUser $admin) => $admin->hasPermission('transactions') || $admin->hasPermission('recycle_pure_gold'))
+            ->pluck('store_id')
+            ->unique();
+        $differenceSections = ReconciliationSection::query()
+            ->whereHas('reconciliation', function (Builder $query) use ($today, $storeId): void {
+                $query->whereDate('reconciliation_date', $today)
+                    ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId));
+            })
+            ->get();
+        $cashDifference = 0.0;
+        $metalDifference = 0.0;
+        foreach ($differenceSections as $section) {
+            foreach ($section->differences ?? [] as $field => $difference) {
+                if ($field === 'cash') {
+                    $cashDifference += abs((float) $difference);
+                } elseif (str_contains($field, 'weight')) {
+                    $metalDifference += abs((float) $difference);
+                }
+            }
+        }
+
+        return [
+            'today' => [
+                'sales' => round((float) $todayRecords->where('business_type', 'sale')->sum('amount'), 2),
+                'recycle' => round((float) $todayRecords->where('business_type', 'recycle')->sum('amount'), 2),
+                'exchange' => round((float) $todayRecords->where('business_type', 'exchange')->sum('amount'), 2),
+                'operating_expenses' => round((float) $todayRecords->where('business_type', 'operating_expense')->sum('amount'), 2),
+            ],
+            'anomalies' => [
+                'unsubmitted' => $storeIds->diff($reports->whereIn('status', ['submitted', 'confirmed'])->pluck('store_id'))->count(),
+                'cash_difference' => round($cashDifference, 2),
+                'metal_difference' => round($metalDifference, 3),
+                'returned' => $reports->where('status', 'returned')->count(),
+            ],
+            'trend_7_days' => collect(range(6, 0))->map(function (int $daysAgo) use ($trendRecords): array {
+                $date = now('Asia/Shanghai')->subDays($daysAgo)->toDateString();
+                $day = $trendRecords->filter(fn (Transaction $record) => $record->transaction_date->format('Y-m-d') === $date);
+
+                return [
+                    'date' => $date,
+                    'sales' => round((float) $day->where('business_type', 'sale')->sum('amount'), 2),
+                    'recycle' => round((float) $day->where('business_type', 'recycle')->sum('amount'), 2),
+                ];
+            })->values()->all(),
         ];
     }
 

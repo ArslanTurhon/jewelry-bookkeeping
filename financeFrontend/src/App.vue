@@ -1,8 +1,14 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Check, Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, Tickets, User, Wallet } from '@element-plus/icons-vue'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { init, use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
 import { api, formatMoney } from './api'
+
+use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 const token = ref(localStorage.getItem('admin_token') || '')
 const adminUser = ref(JSON.parse(localStorage.getItem('admin_user') || 'null'))
@@ -12,6 +18,8 @@ const activeMenu = ref(adminUser.value?.is_super_admin ? 'dashboard' : 'reconcil
 const mobileMenu = ref(false)
 const month = ref(today().slice(0, 7))
 const stats = ref(null)
+const trendChartElement = ref(null)
+let trendChart = null
 const transactions = ref([])
 const opening = ref({})
 const accountDrawer = ref(false)
@@ -348,6 +356,44 @@ async function loadMe() {
 async function loadStats() {
   const { data } = await api.get('/admin/stats/current', { params: { month: month.value } })
   stats.value = data
+  await nextTick()
+  renderTrendChart()
+}
+
+function renderTrendChart() {
+  if (!trendChartElement.value || !stats.value?.trend_7_days) return
+  trendChart ||= init(trendChartElement.value)
+  trendChart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['销售收入', '回收支出'], right: 8 },
+    grid: { left: 18, right: 18, top: 48, bottom: 12, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: stats.value.trend_7_days.map((item) => item.date.slice(5)),
+    },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        name: '销售收入',
+        type: 'line',
+        smooth: true,
+        symbolSize: 7,
+        lineStyle: { width: 3, color: '#1677ff' },
+        itemStyle: { color: '#1677ff' },
+        data: stats.value.trend_7_days.map((item) => item.sales),
+      },
+      {
+        name: '回收支出',
+        type: 'line',
+        smooth: true,
+        symbolSize: 7,
+        lineStyle: { width: 3, color: '#c2413b' },
+        itemStyle: { color: '#c2413b' },
+        data: stats.value.trend_7_days.map((item) => item.recycle),
+      },
+    ],
+  })
 }
 
 async function loadTransactions() {
@@ -803,6 +849,8 @@ onMounted(() => {
     })
   }
 })
+
+onBeforeUnmount(() => trendChart?.dispose())
 </script>
 
 <template>
@@ -864,19 +912,43 @@ onMounted(() => {
         </el-header>
 
         <el-main v-if="activeMenu === 'dashboard' && stats">
-          <el-row :gutter="16">
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('online')"><el-statistic title="线上" :value="stats.online.total" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('pure_gold_fund')"><el-statistic title="纯金回收资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
-          </el-row>
+          <section class="anomaly-band">
+            <button type="button" class="anomaly-metric" @click="selectMenu('reconciliation')">
+              <span>未交账</span><strong>{{ stats.anomalies.unsubmitted }}</strong>
+            </button>
+            <button type="button" class="anomaly-metric" @click="selectMenu('reconciliation')">
+              <span>现金差额</span><strong>¥{{ formatMoney(stats.anomalies.cash_difference) }}</strong>
+            </button>
+            <button type="button" class="anomaly-metric" @click="selectMenu('reconciliation')">
+              <span>金银差额</span><strong>{{ formatWeight(stats.anomalies.metal_difference) }}g</strong>
+            </button>
+            <button type="button" class="anomaly-metric" @click="selectMenu('reconciliation')">
+              <span>被退回</span><strong>{{ stats.anomalies.returned }}</strong>
+            </button>
+          </section>
 
           <el-row :gutter="16" class="section">
-            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月销售" :value="stats.monthly.sales" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月收入" :value="stats.monthly.income" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月回收" :value="stats.monthly.recycle" prefix="¥" /></el-card></el-col>
-            <el-col v-if="adminUser?.is_super_admin" :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月支出" :value="stats.monthly.operating_expenses" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日销售" :value="stats.today.sales" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日回收" :value="stats.today.recycle" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日换现" :value="stats.today.exchange" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日支出" :value="stats.today.operating_expenses" prefix="¥" /></el-card></el-col>
           </el-row>
+
+          <el-row :gutter="16">
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="微信" :value="stats.online.wechat" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="支付宝" :value="stats.online.alipay" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="银行卡" :value="stats.online.bank" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('pure_gold_fund')"><el-statistic title="纯金专用资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
+          </el-row>
+
+          <section class="trend-section section">
+            <div class="section-heading">
+              <div><h3>最近 7 天走势</h3><p>销售收入与回收支出</p></div>
+            </div>
+            <div ref="trendChartElement" class="trend-chart" />
+          </section>
 
           <el-card class="section">
             <template #header>库存克重概览</template>
