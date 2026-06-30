@@ -1,12 +1,13 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\AuditLogController as AdminAuditLogController;
 use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
 use App\Http\Controllers\Api\Admin\CategoryController as AdminCategoryController;
 use App\Http\Controllers\Api\Admin\I18nController as AdminI18nController;
 use App\Http\Controllers\Api\Admin\OpeningBalanceController as AdminOpeningBalanceController;
 use App\Http\Controllers\Api\Admin\RecyclePriceController as AdminRecyclePriceController;
-use App\Http\Controllers\Api\Admin\TransactionController as AdminTransactionController;
 use App\Http\Controllers\Api\Admin\StoreController as AdminStoreController;
+use App\Http\Controllers\Api\Admin\TransactionController as AdminTransactionController;
 use App\Http\Controllers\Api\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Api\App\AuthController as AppAuthController;
 use App\Http\Controllers\Api\App\CategoryController as AppCategoryController;
@@ -47,6 +48,7 @@ Route::prefix('admin')->group(function (): void {
     Route::put('transactions/{transaction}', [AdminTransactionController::class, 'update']);
     Route::delete('transactions/{transaction}', [AdminTransactionController::class, 'destroy']);
     Route::get('account-details', [AdminTransactionController::class, 'accountDetails']);
+    Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
     Route::get('stats/monthly', [AdminTransactionController::class, 'monthlyStats']);
     Route::get('stats/current', [AdminTransactionController::class, 'currentStats']);
     Route::get('recycle-price', [AdminRecyclePriceController::class, 'show']);

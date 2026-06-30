@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\AdminUser;
+use App\Models\AuditLog;
 use App\Models\OpeningBalance;
 use App\Models\Store;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Support\AuditLogger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
@@ -596,5 +598,187 @@ class FinanceApiTest extends TestCase
             'account' => 'boss',
             'password' => 'new-secret-123',
         ])->assertOk()->assertJsonPath('admin.username', 'boss');
+    }
+
+    public function test_staff_cannot_access_store_expenses(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'expense-owner-token'])->save();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '普通店员',
+            'username' => 'expense-staff',
+            'email' => 'expense-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'transactions'],
+        ]);
+        $staff->forceFill(['api_token' => 'expense-staff-token'])->save();
+
+        $expense = [
+            'business_type' => 'operating_expense',
+            'payment_account' => 'cash',
+            'amount' => 88,
+            'expense_category' => 'rent',
+            'transaction_date' => '2026-06-30',
+            'remark' => '六月房租',
+        ];
+        $this->withToken('expense-owner-token')->postJson('/api/admin/transactions', $expense)->assertCreated();
+
+        $this->withToken('expense-staff-token')
+            ->getJson('/api/admin/transactions')
+            ->assertOk()
+            ->assertJsonPath('total', 0);
+        $this->withToken('expense-staff-token')
+            ->getJson('/api/admin/transactions?business_type=operating_expense')
+            ->assertOk()
+            ->assertJsonPath('total', 0);
+        $this->withToken('expense-staff-token')->postJson('/api/admin/transactions', $expense)->assertForbidden();
+        $this->withToken('expense-staff-token')
+            ->getJson('/api/admin/stats/current?month=2026-06')
+            ->assertOk()
+            ->assertJsonMissingPath('monthly.operating_expenses')
+            ->assertJsonMissingPath('monthly.net');
+        $this->withToken('expense-staff-token')
+            ->getJson('/api/admin/account-details?account=cash')
+            ->assertForbidden();
+    }
+
+    public function test_audit_logger_records_safe_before_and_after_snapshots(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+
+        $log = app(AuditLogger::class)->record(
+            $owner,
+            $store,
+            'store.updated',
+            '更正店名',
+            ['name' => '旧店名', 'api_token' => 'secret'],
+            ['name' => '新店名', 'password' => 'secret'],
+        );
+
+        $this->assertSame($owner->id, $log->actor_admin_id);
+        $this->assertSame($store->id, $log->store_id);
+        $this->assertSame(['name' => '旧店名'], $log->before_data);
+        $this->assertSame(['name' => '新店名'], $log->after_data);
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'store.updated',
+            'reason' => '更正店名',
+        ]);
+    }
+
+    public function test_voided_transaction_is_retained_audited_and_excluded_from_stats(): void
+    {
+        $this->seed();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'void-owner-token'])->save();
+
+        $created = $this->withToken('void-owner-token')->postJson('/api/admin/transactions', [
+            'business_type' => 'income',
+            'payment_account' => 'cash',
+            'amount' => 500,
+            'transaction_date' => '2026-06-30',
+            'remark' => '待作废收入',
+        ])->assertCreated()->json();
+
+        $this->withToken('void-owner-token')
+            ->deleteJson('/api/admin/transactions/'.$created['id'], ['reason' => '重复录入'])
+            ->assertOk()
+            ->assertJsonPath('void_reason', '重复录入');
+
+        $this->assertNotNull(Transaction::query()->findOrFail($created['id'])->voided_at);
+        $this->assertDatabaseHas('audit_logs', [
+            'subject_type' => Transaction::class,
+            'subject_id' => $created['id'],
+            'action' => 'transaction.voided',
+            'reason' => '重复录入',
+        ]);
+        $this->withToken('void-owner-token')
+            ->getJson('/api/admin/stats/current?month=2026-06')
+            ->assertOk()
+            ->assertJsonPath('cash', 0)
+            ->assertJsonPath('monthly.income', 0);
+        $this->withToken('void-owner-token')
+            ->deleteJson('/api/admin/transactions/'.$created['id'], ['reason' => '再次作废'])
+            ->assertStatus(422);
+    }
+
+    public function test_transaction_update_requires_reason_and_records_snapshots(): void
+    {
+        $this->seed();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'update-owner-token'])->save();
+        $created = $this->withToken('update-owner-token')->postJson('/api/admin/transactions', [
+            'business_type' => 'income',
+            'payment_account' => 'cash',
+            'amount' => 100,
+            'transaction_date' => '2026-06-30',
+            'remark' => '原金额',
+        ])->assertCreated()->json();
+        $payload = [
+            'business_type' => 'income',
+            'payment_account' => 'cash',
+            'amount' => 120,
+            'transaction_date' => '2026-06-30',
+            'remark' => '更正金额',
+        ];
+
+        $this->withToken('update-owner-token')
+            ->putJson('/api/admin/transactions/'.$created['id'], $payload)
+            ->assertStatus(422);
+        $this->withToken('update-owner-token')
+            ->putJson('/api/admin/transactions/'.$created['id'], $payload + ['change_reason' => '录入金额错误'])
+            ->assertOk()
+            ->assertJsonPath('amount', '120.00');
+
+        $log = AuditLog::query()->where('action', 'transaction.updated')->sole();
+        $this->assertSame('100.00', $log->before_data['amount']);
+        $this->assertSame('120.00', $log->after_data['amount']);
+        $this->assertSame('录入金额错误', $log->reason);
+    }
+
+    public function test_owner_can_query_store_and_user_audit_logs_but_staff_cannot(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'audit-owner-token'])->save();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '待修改员工',
+            'username' => 'audit-staff',
+            'email' => 'audit-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+        ]);
+        $staff->forceFill(['api_token' => 'audit-staff-token'])->save();
+
+        $this->withToken('audit-owner-token')->putJson('/api/admin/stores/'.$store->id, [
+            'name' => '审计总店',
+            'enabled' => true,
+        ])->assertOk();
+        $this->withToken('audit-staff-token')->getJson('/api/admin/audit-logs')->assertForbidden();
+        $this->withToken('audit-owner-token')->putJson('/api/admin/users/'.$staff->id, [
+            'name' => '已修改员工',
+            'username' => 'audit-staff',
+            'email' => 'audit-staff@example.test',
+            'store_id' => $store->id,
+            'enabled' => false,
+            'permissions' => ['dashboard'],
+        ])->assertOk();
+
+        $this->withToken('audit-owner-token')
+            ->getJson('/api/admin/audit-logs?action=user.disabled&store_id='.$store->id)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.action', 'user.disabled')
+            ->assertJsonPath('data.0.actor.id', $owner->id)
+            ->assertJsonPath('data.0.store.id', $store->id);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'store.updated', 'subject_id' => $store->id]);
     }
 }

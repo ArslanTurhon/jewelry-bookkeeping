@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, User, Wallet } from '@element-plus/icons-vue'
+import { Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, Tickets, User, Wallet } from '@element-plus/icons-vue'
 import { api, formatMoney } from './api'
 
 const token = ref(localStorage.getItem('admin_token') || '')
@@ -22,7 +22,7 @@ const transactionDialog = ref(false)
 const editingId = ref(null)
 const i18n = ref({ translations: {}, languages: [], enums: {} })
 const recyclePrice = reactive({ price_date: today(), reference_gold_price: 0, reference_silver_price: 0 })
-const filters = reactive({ business_type: '', payment_account: '', product_type: '', date_from: '', date_to: '' })
+const filters = reactive({ business_type: '', payment_account: '', product_type: '', status: 'active', date_from: '', date_to: '' })
 const pagination = reactive({ page: 1, perPage: 50, total: 0 })
 const users = ref([])
 const stores = ref([])
@@ -43,6 +43,12 @@ const profileForm = reactive({ name: '', username: '' })
 const ownPasswordForm = reactive({ current_password: '', password: '', password_confirmation: '' })
 const form = reactive(defaultForm())
 const itemRows = ref([defaultItem()])
+const changeReason = ref('')
+const auditLogs = ref([])
+const auditPagination = reactive({ page: 1, perPage: 50, total: 0 })
+const auditFilters = reactive({ action: '', date_from: '', date_to: '' })
+const auditDrawer = ref(false)
+const auditDetail = ref(null)
 
 const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
@@ -55,6 +61,7 @@ const visibleMenus = computed(() => [
   { key: 'opening', label: '期初', icon: Coin },
   { key: 'users', label: '用户管理', icon: User },
   { key: 'stores', label: '店铺管理', icon: Coin, visible: Boolean(adminUser.value?.is_super_admin) },
+  { key: 'audit', label: '操作记录', icon: Tickets, visible: Boolean(adminUser.value?.is_super_admin) },
 ].filter((item) => item.visible ?? hasPermission(item.key)))
 const t = (key, fallback = key) => i18n.value.translations?.[key] || fallback
 const isRecycle = computed(() => form.business_type === 'recycle')
@@ -337,6 +344,16 @@ async function loadTransactions() {
   pagination.page = data.current_page || pagination.page
 }
 
+async function loadAuditLogs() {
+  if (!adminUser.value?.is_super_admin) return
+  const { data } = await api.get('/admin/audit-logs', {
+    params: { ...auditFilters, page: auditPagination.page, per_page: auditPagination.perPage },
+  })
+  auditLogs.value = data.data || []
+  auditPagination.total = data.total || 0
+  auditPagination.page = data.current_page || auditPagination.page
+}
+
 async function loadOpening() {
   const { data } = await api.get('/admin/opening-balance')
   opening.value = data
@@ -366,12 +383,14 @@ async function refresh() {
   if (hasPermission('dashboard')) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('users')) tasks.push(loadUsers())
+  if (adminUser.value?.is_super_admin && activeMenu.value === 'audit') tasks.push(loadAuditLogs())
   await Promise.all(tasks)
 }
 
-function selectMenu(key) {
+async function selectMenu(key) {
   activeMenu.value = key
   mobileMenu.value = false
+  if (key === 'audit') await loadAuditLogs()
 }
 
 async function changePage(page) {
@@ -391,7 +410,7 @@ async function applyFilters() {
 }
 
 function clearFilters() {
-  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', date_from: '', date_to: '' })
+  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', status: 'active', date_from: '', date_to: '' })
   applyFilters()
 }
 
@@ -536,6 +555,7 @@ function openEdit(row) {
   })
   itemRows.value = row.item_weights?.length ? JSON.parse(JSON.stringify(row.item_weights)) : [defaultItem()]
   editingId.value = row.id
+  changeReason.value = ''
   transactionDialog.value = true
 }
 
@@ -577,6 +597,7 @@ async function saveTransaction() {
   try {
     const payload = buildPayload()
     if (editingId.value) {
+      payload.change_reason = changeReason.value
       await api.put(`/admin/transactions/${editingId.value}`, payload)
     } else {
       await api.post('/admin/transactions', payload)
@@ -590,10 +611,21 @@ async function saveTransaction() {
 }
 
 async function deleteTransaction(row) {
-  await ElMessageBox.confirm(`删除这笔 ${formatMoney(row.amount)} 元流水？`, '确认删除', { type: 'warning' })
-  await api.delete(`/admin/transactions/${row.id}`)
+  const { value } = await ElMessageBox.prompt(`作废这笔 ${formatMoney(row.amount)} 元流水，原记录会永久保留。`, '确认作废', {
+    confirmButtonText: '作废',
+    cancelButtonText: '取消',
+    inputPlaceholder: '请输入作废原因',
+    inputValidator: (text) => text?.trim().length >= 2 || '原因至少填写 2 个字符',
+    type: 'warning',
+  })
+  await api.delete(`/admin/transactions/${row.id}`, { data: { reason: value.trim() } })
   await refresh()
-  ElMessage.success('已删除')
+  ElMessage.success('流水已作废')
+}
+
+function showAuditDetail(row) {
+  auditDetail.value = row
+  auditDrawer.value = true
 }
 
 function productName(item) {
@@ -691,17 +723,17 @@ onMounted(() => {
 
         <el-main v-if="activeMenu === 'dashboard' && stats">
           <el-row :gutter="16">
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('online')"><el-statistic title="线上" :value="stats.online.total" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="openAccount('pure_gold_fund')"><el-statistic title="纯金回收资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('online')"><el-statistic title="线上" :value="stats.online.total" prefix="¥" /></el-card></el-col>
+            <el-col :xs="24" :sm="12" :lg="6"><el-card shadow="hover" @click="adminUser?.is_super_admin && openAccount('pure_gold_fund')"><el-statistic title="纯金回收资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
           </el-row>
 
           <el-row :gutter="16" class="section">
             <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月销售" :value="stats.monthly.sales" prefix="¥" /></el-card></el-col>
             <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月收入" :value="stats.monthly.income" prefix="¥" /></el-card></el-col>
             <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月回收" :value="stats.monthly.recycle" prefix="¥" /></el-card></el-col>
-            <el-col :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月支出" :value="stats.monthly.operating_expenses" prefix="¥" /></el-card></el-col>
+            <el-col v-if="adminUser?.is_super_admin" :xs="24" :sm="12" :lg="6"><el-card><el-statistic title="本月支出" :value="stats.monthly.operating_expenses" prefix="¥" /></el-card></el-col>
           </el-row>
 
           <el-card class="section">
@@ -751,12 +783,13 @@ onMounted(() => {
                   <el-button v-if="hasPermission('transactions')" :disabled="!canWriteCurrentStore" type="primary" :icon="Plus" @click="openCreate('income')">收入</el-button>
                   <el-button v-if="hasPermission('transactions') || hasPermission('recycle_pure_gold')" :disabled="!canWriteCurrentStore" type="warning" :icon="Plus" @click="openCreateRecycle('pure_gold')">纯金回收</el-button>
                   <el-button v-if="hasPermission('transactions') || hasPermission('recycle_gold_wrapped')" :disabled="!canWriteCurrentStore" type="warning" :icon="Plus" @click="openCreateRecycle('gold_wrapped')">金包银回收</el-button>
-                  <el-button v-if="hasPermission('transactions')" :disabled="!canWriteCurrentStore" type="danger" :icon="Plus" @click="openCreate('operating_expense')">支出</el-button>
+                  <el-button v-if="adminUser?.is_super_admin" :disabled="!canWriteCurrentStore" type="danger" :icon="Plus" @click="openCreate('operating_expense')">支出</el-button>
                 </div>
               </div>
             </template>
             <el-form :inline="true">
-              <el-form-item label="业务"><el-select v-model="filters.business_type" clearable @change="applyFilters"><el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option label="支出" value="operating_expense" /></el-select></el-form-item>
+              <el-form-item label="业务"><el-select v-model="filters.business_type" clearable @change="applyFilters"><el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option v-if="adminUser?.is_super_admin" label="支出" value="operating_expense" /></el-select></el-form-item>
+              <el-form-item v-if="adminUser?.is_super_admin" label="状态"><el-select v-model="filters.status" @change="applyFilters"><el-option label="有效" value="active" /><el-option label="已作废" value="voided" /><el-option label="全部" value="all" /></el-select></el-form-item>
               <el-form-item label="账户"><el-select v-model="filters.payment_account" clearable @change="applyFilters"><el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="现金+线上" value="mixed" /><el-option label="纯金回收资金" value="pure_gold_fund" /></el-select></el-form-item>
               <el-form-item label="开始日期"><el-date-picker v-model="filters.date_from" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
               <el-form-item label="结束日期"><el-date-picker v-model="filters.date_to" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
@@ -774,10 +807,13 @@ onMounted(() => {
                 <el-table-column label="账户" width="160"><template #default="{ row }">{{ accountName(row) }}</template></el-table-column>
                 <el-table-column label="重量" min-width="170"><template #default="{ row }">{{ weightText(row) }}</template></el-table-column>
                 <el-table-column prop="remark" label="备注" min-width="160" />
+                <el-table-column label="状态" width="110">
+                  <template #default="{ row }"><el-tag :type="row.voided_at ? 'danger' : 'success'">{{ row.voided_at ? '已作废' : '有效' }}</el-tag></template>
+                </el-table-column>
                 <el-table-column label="操作" width="130" fixed="right">
                   <template #default="{ row }">
-                    <el-button v-if="canEditTransactions" :icon="Edit" text @click="openEdit(row)" />
-                    <el-button v-if="canEditTransactions" :icon="Delete" text type="danger" @click="deleteTransaction(row)" />
+                    <el-button v-if="canEditTransactions && !row.voided_at" :icon="Edit" text @click="openEdit(row)" />
+                    <el-button v-if="canEditTransactions && !row.voided_at" :icon="Delete" text type="danger" title="作废" @click="deleteTransaction(row)" />
                     <span v-if="!canEditTransactions" class="muted">仅录入查询</span>
                   </template>
                 </el-table-column>
@@ -898,6 +934,28 @@ onMounted(() => {
             </el-table>
           </el-card>
         </el-main>
+
+        <el-main v-if="activeMenu === 'audit'">
+          <el-card>
+            <template #header><span>操作记录</span></template>
+            <el-form :inline="true">
+              <el-form-item label="操作"><el-select v-model="auditFilters.action" clearable @change="loadAuditLogs"><el-option label="流水修改" value="transaction.updated" /><el-option label="流水作废" value="transaction.voided" /><el-option label="店铺修改" value="store.updated" /><el-option label="员工修改" value="user.updated" /><el-option label="员工停用" value="user.disabled" /><el-option label="员工启用" value="user.enabled" /></el-select></el-form-item>
+              <el-form-item label="开始日期"><el-date-picker v-model="auditFilters.date_from" type="date" value-format="YYYY-MM-DD" @change="loadAuditLogs" /></el-form-item>
+              <el-form-item label="结束日期"><el-date-picker v-model="auditFilters.date_to" type="date" value-format="YYYY-MM-DD" @change="loadAuditLogs" /></el-form-item>
+            </el-form>
+            <div class="table-scroll">
+              <el-table :data="auditLogs" stripe border>
+                <el-table-column prop="created_at" label="时间" width="180" />
+                <el-table-column prop="actor.name" label="操作人" width="140" />
+                <el-table-column prop="store.name" label="店铺" width="140" />
+                <el-table-column prop="action" label="操作类型" min-width="170" />
+                <el-table-column prop="reason" label="原因" min-width="180" />
+                <el-table-column label="详情" width="90"><template #default="{ row }"><el-button text @click="showAuditDetail(row)">查看</el-button></template></el-table-column>
+              </el-table>
+            </div>
+            <el-pagination class="section pagination-bar" background layout="total, prev, pager, next" :current-page="auditPagination.page" :page-size="auditPagination.perPage" :total="auditPagination.total" @current-change="(page) => { auditPagination.page = page; loadAuditLogs() }" />
+          </el-card>
+        </el-main>
       </el-container>
     </el-container>
 
@@ -940,7 +998,7 @@ onMounted(() => {
           <el-col :xs="24" :md="8">
             <el-form-item label="业务类型">
               <el-select v-model="form.business_type" @change="handleBusinessTypeChange">
-                <el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option label="支出" value="operating_expense" />
+                <el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option v-if="adminUser?.is_super_admin" label="支出" value="operating_expense" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -1028,12 +1086,24 @@ onMounted(() => {
         </template>
 
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="3" /></el-form-item>
+        <el-form-item v-if="editingId" label="修改原因"><el-input v-model="changeReason" type="textarea" :rows="2" placeholder="必填，至少 2 个字符" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="transactionDialog = false">取消</el-button>
         <el-button type="primary" :icon="CreditCard" @click="saveTransaction">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-drawer v-model="auditDrawer" title="操作详情" size="min(92vw, 720px)">
+      <template v-if="auditDetail">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="操作">{{ auditDetail.action }}</el-descriptions-item>
+          <el-descriptions-item label="原因">{{ auditDetail.reason || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="修改前"><pre class="audit-json">{{ JSON.stringify(auditDetail.before_data, null, 2) }}</pre></el-descriptions-item>
+          <el-descriptions-item label="修改后"><pre class="audit-json">{{ JSON.stringify(auditDetail.after_data, null, 2) }}</pre></el-descriptions-item>
+        </el-descriptions>
+      </template>
+    </el-drawer>
 
     <el-dialog v-model="userDialog" :title="editingUserId ? '编辑用户' : '新增用户'" width="min(94vw, 620px)" class="responsive-dialog">
       <el-form :model="userForm" label-width="100px" class="responsive-form">

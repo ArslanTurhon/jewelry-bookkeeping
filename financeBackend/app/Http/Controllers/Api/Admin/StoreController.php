@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Models\Store;
 use App\Support\AdminAccess;
+use App\Support\AuditLogger;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class StoreController extends Controller
@@ -31,26 +33,34 @@ class StoreController extends Controller
         return response()->json(Store::query()->create($this->validated($request)), 201);
     }
 
-    public function update(Request $request, Store $store)
+    public function update(Request $request, Store $store, AuditLogger $audit)
     {
         $owner = $this->owner($request);
         if (! $owner instanceof AdminUser) {
             return $owner;
         }
 
-        $store->update($this->validated($request, $store));
+        DB::transaction(function () use ($request, $store, $owner, $audit): void {
+            $before = $store->toArray();
+            $store->update($this->validated($request, $store));
+            $audit->record($owner, $store, 'store.updated', null, $before, $store->fresh()->toArray());
+        });
 
         return response()->json($store->fresh());
     }
 
-    public function destroy(Request $request, Store $store)
+    public function destroy(Request $request, Store $store, AuditLogger $audit)
     {
         $owner = $this->owner($request);
         if (! $owner instanceof AdminUser) {
             return $owner;
         }
 
-        $store->update(['enabled' => false]);
+        DB::transaction(function () use ($store, $owner, $audit): void {
+            $before = $store->toArray();
+            $store->update(['enabled' => false]);
+            $audit->record($owner, $store, 'store.updated', null, $before, $store->fresh()->toArray());
+        });
 
         return response()->json(['message' => 'disabled']);
     }

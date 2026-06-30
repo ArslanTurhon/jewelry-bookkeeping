@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Support\AdminAccess;
+use App\Support\AuditLogger;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class UserController extends Controller
@@ -47,7 +49,7 @@ class UserController extends Controller
         return response()->json(AdminAccess::present(AdminUser::query()->create($data)), 201);
     }
 
-    public function update(Request $request, AdminUser $adminUser)
+    public function update(Request $request, AdminUser $adminUser, AuditLogger $audit)
     {
         $admin = AdminAccess::require($request, 'users');
         if (! $admin instanceof AdminUser) {
@@ -58,12 +60,20 @@ class UserController extends Controller
             return response()->json(['message' => '超级管理员不能被修改权限或停用'], 422);
         }
 
-        $adminUser->update($this->validatedData($request));
+        DB::transaction(function () use ($request, $adminUser, $admin, $audit): void {
+            $before = $adminUser->toArray();
+            $wasEnabled = $adminUser->enabled;
+            $adminUser->update($this->validatedData($request));
+            $action = $wasEnabled === $adminUser->enabled
+                ? 'user.updated'
+                : ($adminUser->enabled ? 'user.enabled' : 'user.disabled');
+            $audit->record($admin, $adminUser, $action, null, $before, $adminUser->fresh()->toArray());
+        });
 
         return response()->json(AdminAccess::present($adminUser->fresh()));
     }
 
-    public function destroy(Request $request, AdminUser $adminUser)
+    public function destroy(Request $request, AdminUser $adminUser, AuditLogger $audit)
     {
         $admin = AdminAccess::require($request, 'users');
         if (! $admin instanceof AdminUser) {
@@ -74,7 +84,11 @@ class UserController extends Controller
             return response()->json(['message' => '超级管理员不能删除'], 422);
         }
 
-        $adminUser->forceFill(['enabled' => false, 'api_token' => null])->save();
+        DB::transaction(function () use ($adminUser, $admin, $audit): void {
+            $before = $adminUser->toArray();
+            $adminUser->forceFill(['enabled' => false, 'api_token' => null])->save();
+            $audit->record($admin, $adminUser, 'user.disabled', null, $before, $adminUser->fresh()->toArray());
+        });
 
         return response()->json(['message' => 'disabled']);
     }

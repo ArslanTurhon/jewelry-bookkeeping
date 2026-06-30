@@ -43,11 +43,13 @@ class FinanceStats
     public function current(?int $userId = null, ?string $month = null, ?int $storeId = null): array
     {
         $records = Transaction::query()
+            ->active()
             ->when($userId, fn (Builder $query) => $query->where('user_id', $userId))
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->get();
 
         $monthly = Transaction::query()
+            ->active()
             ->when($userId, fn (Builder $query) => $query->where('user_id', $userId))
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->when($month, fn (Builder $query) => $query->where('transaction_date', 'like', $month.'%'))
@@ -126,6 +128,7 @@ class FinanceStats
     public function accountDetails(string $account, ?string $month = null, string $range = 'month', ?int $storeId = null): array
     {
         $records = Transaction::query()
+            ->active()
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->orderBy('transaction_date')
             ->orderBy('id')

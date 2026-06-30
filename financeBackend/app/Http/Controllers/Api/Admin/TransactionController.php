@@ -8,10 +8,12 @@ use App\Models\RecyclePrice;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\AdminAccess;
+use App\Support\AuditLogger;
 use App\Support\BusinessDictionary;
 use App\Support\FinanceStats;
 use App\Support\StoreContext;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -31,6 +33,11 @@ class TransactionController extends Controller
         $query = Transaction::query()->with('user')->latest('transaction_date')->latest('id');
         $stores->scope($query, $admin, $request);
         $this->applyReadableScope($query, $admin);
+        match ($request->string('status', 'active')->toString()) {
+            'all' => null,
+            'voided' => $query->whereNotNull('voided_at'),
+            default => $query->active(),
+        };
         foreach (['business_type', 'payment_account', 'online_method', 'stock_bucket', 'product_type', 'wrap_material', 'expense_category'] as $field) {
             if ($request->filled($field)) {
                 $query->where($field, $request->string($field));
@@ -77,7 +84,7 @@ class TransactionController extends Controller
         return response()->json($this->present($transaction->load('user'), $dictionary, $this->language($request)), 201);
     }
 
-    public function update(Request $request, Transaction $transaction, BusinessDictionary $dictionary)
+    public function update(Request $request, Transaction $transaction, BusinessDictionary $dictionary, AuditLogger $audit)
     {
         $admin = AdminAccess::require($request);
         if (! $admin instanceof AdminUser) {
@@ -87,12 +94,23 @@ class TransactionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $transaction->update($this->normalize($this->validatedData($request), $transaction->store_id));
+        if ($transaction->voided_at) {
+            return response()->json(['message' => '已作废流水不能修改'], 422);
+        }
+        $reason = $request->validate([
+            'change_reason' => ['required', 'string', 'min:2', 'max:500'],
+        ])['change_reason'];
+
+        DB::transaction(function () use ($request, $transaction, $audit, $admin, $reason): void {
+            $before = $transaction->toArray();
+            $transaction->update($this->normalize($this->validatedData($request), $transaction->store_id));
+            $audit->record($admin, $transaction, 'transaction.updated', $reason, $before, $transaction->fresh()->toArray());
+        });
 
         return response()->json($this->present($transaction->fresh('user'), $dictionary, $this->language($request)));
     }
 
-    public function destroy(Request $request, Transaction $transaction)
+    public function destroy(Request $request, Transaction $transaction, AuditLogger $audit)
     {
         $admin = AdminAccess::require($request);
         if (! $admin instanceof AdminUser) {
@@ -102,9 +120,24 @@ class TransactionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $transaction->delete();
+        if ($transaction->voided_at) {
+            return response()->json(['message' => '该流水已经作废'], 422);
+        }
+        $reason = $request->validate([
+            'reason' => ['required', 'string', 'min:2', 'max:500'],
+        ])['reason'];
 
-        return response()->json(['message' => 'deleted']);
+        DB::transaction(function () use ($transaction, $admin, $reason, $audit): void {
+            $before = $transaction->toArray();
+            $transaction->forceFill([
+                'voided_at' => now(),
+                'voided_by_admin_id' => $admin->id,
+                'void_reason' => $reason,
+            ])->save();
+            $audit->record($admin, $transaction, 'transaction.voided', $reason, $before, $transaction->fresh()->toArray());
+        });
+
+        return response()->json($transaction->fresh());
     }
 
     public function monthlyStats(Request $request, FinanceStats $stats, StoreContext $stores)
@@ -113,12 +146,16 @@ class TransactionController extends Controller
         if (! $admin instanceof AdminUser) {
             return $admin;
         }
-
-        return response()->json($stats->current(
+        $data = $stats->current(
             null,
             $request->string('month', now()->format('Y-m'))->toString(),
             $stores->readableStoreId($admin, $request),
-        ));
+        );
+        if (! $admin->is_super_admin) {
+            unset($data['monthly']['operating_expenses'], $data['monthly']['net']);
+        }
+
+        return response()->json($data);
     }
 
     public function currentStats(Request $request, FinanceStats $stats, StoreContext $stores)
@@ -131,6 +168,9 @@ class TransactionController extends Controller
         $admin = AdminAccess::require($request, 'dashboard');
         if (! $admin instanceof AdminUser) {
             return $admin;
+        }
+        if (! $admin->is_super_admin) {
+            return response()->json(['message' => 'Forbidden'], 403);
         }
 
         $data = $request->validate([
@@ -161,6 +201,9 @@ class TransactionController extends Controller
 
     private function applyReadableScope($query, AdminUser $admin): void
     {
+        if (! $admin->is_super_admin) {
+            $query->where('business_type', '!=', 'operating_expense');
+        }
         if ($admin->hasPermission('transactions')) {
             return;
         }
@@ -183,6 +226,9 @@ class TransactionController extends Controller
 
     private function canCreateTransaction(AdminUser $admin, array $data): bool
     {
+        if (! $admin->is_super_admin && ($data['business_type'] ?? null) === 'operating_expense') {
+            return false;
+        }
         if ($admin->hasPermission('transactions')) {
             return true;
         }

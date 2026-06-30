@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -33,6 +34,9 @@ class Transaction extends Model
         'expense_category',
         'transaction_date',
         'remark',
+        'voided_at',
+        'voided_by_admin_id',
+        'void_reason',
     ];
 
     protected function casts(): array
@@ -52,7 +56,13 @@ class Transaction extends Model
             'reference_gold_price' => 'decimal:2',
             'reference_silver_price' => 'decimal:2',
             'transaction_date' => 'date:Y-m-d',
+            'voided_at' => 'datetime',
         ];
+    }
+
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->whereNull('voided_at');
     }
 
     public function user(): BelongsTo
