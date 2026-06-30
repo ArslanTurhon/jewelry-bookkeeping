@@ -103,19 +103,21 @@ class FinanceStats
                 default => 0,
             };
 
-            if ($cashAmount = $this->cashAmount($record)) {
-                $cash += $amountSign * $cashAmount;
-            } elseif ($record->payment_account === 'pure_gold_fund') {
-                $pureGoldFund += $amountSign * (float) $record->amount;
+            if ($record->affects_finance) {
+                if ($cashAmount = $this->cashAmount($record)) {
+                    $cash += $amountSign * $cashAmount;
+                } elseif ($record->payment_account === 'pure_gold_fund') {
+                    $pureGoldFund += $amountSign * (float) $record->amount;
+                }
+
+                if ($record->online_method && ($onlineAmount = $this->onlineAmount($record))) {
+                    $online[$record->online_method] += $amountSign * $onlineAmount;
+                }
             }
 
-            if ($record->online_method && ($onlineAmount = $this->onlineAmount($record))) {
-                $online[$record->online_method] += $amountSign * $onlineAmount;
-            }
-
-            if ($record->business_type === 'sale') {
+            if ($record->affects_stock && $record->business_type === 'sale') {
                 $this->applyStock($stock, $record, -1);
-            } elseif ($record->business_type === 'recycle') {
+            } elseif ($record->affects_stock && $record->business_type === 'recycle') {
                 $this->applyStock($stock, $record, 1);
                 $this->applyRecycleCost($recycleCost, $record);
             }
@@ -141,11 +143,12 @@ class FinanceStats
             }
         }
 
-        $monthlySales = (float) $monthly->where('business_type', 'sale')->sum('amount');
-        $monthlyIncome = (float) $monthly->where('business_type', 'income')->sum('amount')
+        $financialMonthly = $monthly->where('affects_finance', true);
+        $monthlySales = (float) $financialMonthly->where('business_type', 'sale')->sum('amount');
+        $monthlyIncome = (float) $financialMonthly->where('business_type', 'income')->sum('amount')
             + (float) $monthlyExchanges->sum('fee');
-        $monthlyRecycle = (float) $monthly->where('business_type', 'recycle')->sum('amount');
-        $monthlyExpenses = (float) $monthly->where('business_type', 'operating_expense')->sum('amount');
+        $monthlyRecycle = (float) $financialMonthly->where('business_type', 'recycle')->sum('amount');
+        $monthlyExpenses = (float) $financialMonthly->where('business_type', 'operating_expense')->sum('amount');
         $onlineTotal = array_sum($online);
         $total = $cash + $onlineTotal + $pureGoldFund;
         $dashboard = $this->dashboardSummary($records, $exchanges, $storeId);
@@ -178,7 +181,9 @@ class FinanceStats
     {
         $today = now('Asia/Shanghai')->toDateString();
         $start = now('Asia/Shanghai')->subDays(6)->startOfDay();
-        $todayRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->format('Y-m-d') === $today);
+        $todayRecords = $records->filter(
+            fn (Transaction $record) => $record->affects_finance && $record->transaction_date->format('Y-m-d') === $today,
+        );
         $todayExchanges = $exchanges->filter(fn (Exchange $exchange) => $exchange->exchange_date->format('Y-m-d') === $today);
         $trendRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->gte($start));
         $reports = DailyReconciliation::query()

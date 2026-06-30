@@ -116,6 +116,14 @@ class ReconciliationController extends Controller
                 throw ValidationException::withMessages(['section' => '该部分已经提交']);
             }
 
+            $service->replaceSummaryTransactions(
+                $section,
+                $admin,
+                $sectionType,
+                $data['no_business'],
+                $data['business_summary'] ?? [],
+                $report->reconciliation_date->format('Y-m-d'),
+            );
             $book = $service->snapshot($admin->store_id, $sectionType);
             $differences = $service->differences($data['actual_snapshot'], $book);
             if ($service->hasDifferences($differences) && blank($data['difference_reason'] ?? null)) {

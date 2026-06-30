@@ -1185,10 +1185,13 @@ class FinanceApiTest extends TestCase
             'sales_wechat' => 300,
             'sales_alipay' => 200,
             'sales_bank' => 100,
+            'sales_pure_gold_amount' => 300,
             'sales_pure_gold_weight' => 1,
             'sales_pure_gold_pieces' => 1,
+            'sales_pure_silver_amount' => 200,
             'sales_pure_silver_weight' => 2,
             'sales_pure_silver_pieces' => 1,
+            'sales_gold_wrapped_amount' => 500,
             'sales_gold_wrapped_gold_weight' => 0.5,
             'sales_gold_wrapped_silver_weight' => 4,
             'sales_gold_wrapped_pieces' => 1,
@@ -1197,8 +1200,10 @@ class FinanceApiTest extends TestCase
             'recycle_wechat' => 100,
             'recycle_alipay' => 0,
             'recycle_bank' => 0,
+            'recycle_pure_silver_amount' => 100,
             'recycle_pure_silver_weight' => 5,
             'recycle_pure_silver_pieces' => 1,
+            'recycle_gold_wrapped_amount' => 100,
             'recycle_gold_wrapped_gold_weight' => 0,
             'recycle_gold_wrapped_silver_weight' => 0,
             'recycle_gold_wrapped_pieces' => 0,
@@ -1207,6 +1212,7 @@ class FinanceApiTest extends TestCase
             'no_business' => false,
             'business_summary' => $summary,
             'actual_snapshot' => $snapshot,
+            'difference_reason' => '接口校验测试使用的盘点差额',
         ];
 
         $this->withToken($staff->api_token)
@@ -1228,6 +1234,85 @@ class FinanceApiTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('business_summary.sales_amount', 1000)
             ->assertJsonPath('business_summary.recycle_amount', 200);
+    }
+
+    public function test_reconciliation_summary_creates_balanced_finance_and_stock_entries_once(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'sale_stock.pure_silver.silver_weight')->update(['value' => 5]);
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'sale_stock.pure_silver.pieces')->update(['value' => 2]);
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '落账员工',
+            'username' => 'posting-staff',
+            'email' => 'posting-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'posting-staff-token',
+        ]);
+        $summary = [
+            'sales_amount' => 100,
+            'sales_cash' => 100,
+            'sales_wechat' => 0,
+            'sales_alipay' => 0,
+            'sales_bank' => 0,
+            'sales_pure_gold_amount' => 0,
+            'sales_pure_gold_weight' => 0,
+            'sales_pure_gold_pieces' => 0,
+            'sales_pure_silver_amount' => 100,
+            'sales_pure_silver_weight' => 2,
+            'sales_pure_silver_pieces' => 1,
+            'sales_gold_wrapped_amount' => 0,
+            'sales_gold_wrapped_gold_weight' => 0,
+            'sales_gold_wrapped_silver_weight' => 0,
+            'sales_gold_wrapped_pieces' => 0,
+            'recycle_amount' => 50,
+            'recycle_cash' => 50,
+            'recycle_wechat' => 0,
+            'recycle_alipay' => 0,
+            'recycle_bank' => 0,
+            'recycle_pure_silver_amount' => 50,
+            'recycle_pure_silver_weight' => 1,
+            'recycle_pure_silver_pieces' => 1,
+            'recycle_gold_wrapped_amount' => 0,
+            'recycle_gold_wrapped_gold_weight' => 0,
+            'recycle_gold_wrapped_silver_weight' => 0,
+            'recycle_gold_wrapped_pieces' => 0,
+        ];
+        $actual = app(ReconciliationService::class)->snapshot($store->id, 'general');
+        $actual['cash'] = 50;
+        $actual['sale_pure_silver_weight'] = 3;
+        $actual['sale_pure_silver_pieces'] = 1;
+        $actual['scrap_pure_silver_weight'] = 1;
+        $actual['scrap_pure_silver_pieces'] = 1;
+
+        $created = $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', [
+                'no_business' => false,
+                'business_summary' => $summary,
+                'actual_snapshot' => $actual,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('differences.cash', 0);
+
+        $sectionId = $created->json('id');
+        $this->assertDatabaseCount('transactions', 4);
+        $this->assertSame(2, Transaction::query()->where('reconciliation_section_id', $sectionId)->where('affects_finance', true)->count());
+        $this->assertSame(2, Transaction::query()->where('reconciliation_section_id', $sectionId)->where('affects_stock', true)->count());
+
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'posting-owner-token'])->save();
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/stats/current?month=2026-07')
+            ->assertOk()
+            ->assertJsonPath('cash', 50)
+            ->assertJsonPath('monthly.sales', 100)
+            ->assertJsonPath('monthly.recycle', 50)
+            ->assertJsonPath('stock.sale_stock.products.pure_silver.silver_weight', 3)
+            ->assertJsonPath('stock.scrap_stock.products.pure_silver.silver_weight', 1);
     }
 
     public function test_owner_sees_pending_reports_before_staff_open_the_page(): void

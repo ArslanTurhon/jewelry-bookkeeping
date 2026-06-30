@@ -13,6 +13,8 @@ class Transaction extends Model
         'store_id',
         'recorded_by_admin_id',
         'reconciliation_section_id',
+        'affects_finance',
+        'affects_stock',
         'business_type',
         'payment_account',
         'online_method',
@@ -44,6 +46,8 @@ class Transaction extends Model
     {
         return [
             'amount' => 'decimal:2',
+            'affects_finance' => 'boolean',
+            'affects_stock' => 'boolean',
             'cash_amount' => 'decimal:2',
             'online_amount' => 'decimal:2',
             'recycle_price_rate' => 'decimal:2',

@@ -3,6 +3,9 @@
 namespace App\Support;
 
 use App\Models\AdminUser;
+use App\Models\ReconciliationSection;
+use App\Models\Transaction;
+use App\Models\User;
 use Illuminate\Validation\ValidationException;
 
 class ReconciliationService
@@ -66,12 +69,17 @@ class ReconciliationService
             : [
                 'sales_amount',
                 'sales_cash', 'sales_wechat', 'sales_alipay', 'sales_bank',
+                'sales_pure_gold_amount',
                 'sales_pure_gold_weight', 'sales_pure_gold_pieces',
+                'sales_pure_silver_amount',
                 'sales_pure_silver_weight', 'sales_pure_silver_pieces',
+                'sales_gold_wrapped_amount',
                 'sales_gold_wrapped_gold_weight', 'sales_gold_wrapped_silver_weight', 'sales_gold_wrapped_pieces',
                 'recycle_amount',
                 'recycle_cash', 'recycle_wechat', 'recycle_alipay', 'recycle_bank',
+                'recycle_pure_silver_amount',
                 'recycle_pure_silver_weight', 'recycle_pure_silver_pieces',
+                'recycle_gold_wrapped_amount',
                 'recycle_gold_wrapped_gold_weight', 'recycle_gold_wrapped_silver_weight', 'recycle_gold_wrapped_pieces',
             ];
     }
@@ -108,7 +116,114 @@ class ReconciliationService
             if (abs($recyclePayments - (float) $summary['recycle_amount']) > 0.009) {
                 throw ValidationException::withMessages(['business_summary' => '回收付款合计必须等于回收总额']);
             }
+            $salesProducts = collect(['sales_pure_gold_amount', 'sales_pure_silver_amount', 'sales_gold_wrapped_amount'])->sum(
+                fn (string $field) => (float) $summary[$field],
+            );
+            $recycleProducts = collect(['recycle_pure_silver_amount', 'recycle_gold_wrapped_amount'])->sum(
+                fn (string $field) => (float) $summary[$field],
+            );
+            if (abs($salesProducts - (float) $summary['sales_amount']) > 0.009) {
+                throw ValidationException::withMessages(['business_summary' => '各类销售金额合计必须等于销售总额']);
+            }
+            if (abs($recycleProducts - (float) $summary['recycle_amount']) > 0.009) {
+                throw ValidationException::withMessages(['business_summary' => '各类回收金额合计必须等于回收总额']);
+            }
         }
+    }
+
+    public function replaceSummaryTransactions(
+        ReconciliationSection $section,
+        AdminUser $admin,
+        string $sectionType,
+        bool $noBusiness,
+        array $summary,
+        string $date,
+    ): void {
+        Transaction::query()->where('reconciliation_section_id', $section->id)->delete();
+        if ($noBusiness) {
+            return;
+        }
+        $user = User::query()->firstOrCreate(
+            ['openid' => 'daily-reconciliation-system'],
+            ['name' => '每日交账汇总'],
+        );
+        $base = [
+            'store_id' => $admin->store_id,
+            'recorded_by_admin_id' => $admin->id,
+            'reconciliation_section_id' => $section->id,
+            'user_id' => $user->id,
+            'transaction_date' => $date,
+            'remark' => '每日交账自动生成',
+        ];
+        if ($sectionType === 'pure_gold') {
+            $this->createFinanceEntry($base, 'recycle', 'pure_gold_fund', null, $summary['recycle_amount']);
+            $this->createStockEntry($base, 'recycle', 'pure_gold', $summary['recycle_amount'], [
+                'pure_gold_weight' => $summary['recycle_pure_gold_weight'],
+                'material_pieces' => $summary['recycle_pure_gold_pieces'],
+            ]);
+
+            return;
+        }
+        foreach (['cash' => null, 'wechat' => 'wechat', 'alipay' => 'alipay', 'bank' => 'bank'] as $key => $method) {
+            $account = $method ? 'online' : 'cash';
+            $this->createFinanceEntry($base, 'sale', $account, $method, $summary['sales_'.$key]);
+            $this->createFinanceEntry($base, 'recycle', $account, $method, $summary['recycle_'.$key]);
+        }
+        $this->createStockEntry($base, 'sale', 'pure_gold', $summary['sales_pure_gold_amount'], [
+            'pure_gold_weight' => $summary['sales_pure_gold_weight'],
+            'material_pieces' => $summary['sales_pure_gold_pieces'],
+        ]);
+        $this->createStockEntry($base, 'sale', 'pure_silver', $summary['sales_pure_silver_amount'], [
+            'material_weight' => $summary['sales_pure_silver_weight'],
+            'material_pieces' => $summary['sales_pure_silver_pieces'],
+        ]);
+        $this->createStockEntry($base, 'sale', 'gold_wrapped', $summary['sales_gold_wrapped_amount'], [
+            'wrap_material' => 'silver',
+            'wrapped_gold_weight' => $summary['sales_gold_wrapped_gold_weight'],
+            'material_weight' => $summary['sales_gold_wrapped_silver_weight'],
+            'material_pieces' => $summary['sales_gold_wrapped_pieces'],
+        ]);
+        $this->createStockEntry($base, 'recycle', 'pure_silver', $summary['recycle_pure_silver_amount'], [
+            'material_weight' => $summary['recycle_pure_silver_weight'],
+            'material_pieces' => $summary['recycle_pure_silver_pieces'],
+        ]);
+        $this->createStockEntry($base, 'recycle', 'gold_wrapped', $summary['recycle_gold_wrapped_amount'], [
+            'wrap_material' => 'silver',
+            'wrapped_gold_weight' => $summary['recycle_gold_wrapped_gold_weight'],
+            'material_weight' => $summary['recycle_gold_wrapped_silver_weight'],
+            'material_pieces' => $summary['recycle_gold_wrapped_pieces'],
+        ]);
+    }
+
+    private function createFinanceEntry(array $base, string $businessType, string $account, ?string $method, $amount): void
+    {
+        if ((float) $amount === 0.0) {
+            return;
+        }
+        Transaction::query()->create($base + [
+            'business_type' => $businessType,
+            'payment_account' => $account,
+            'online_method' => $method,
+            'amount' => $amount,
+            'affects_finance' => true,
+            'affects_stock' => false,
+        ]);
+    }
+
+    private function createStockEntry(array $base, string $businessType, string $productType, $amount, array $stock): void
+    {
+        if ((float) $amount === 0.0 && collect($stock)->every(fn ($value) => (float) $value === 0.0)) {
+            return;
+        }
+        Transaction::query()->create($base + $stock + [
+            'business_type' => $businessType,
+            'payment_account' => 'cash',
+            'amount' => $amount,
+            'stock_bucket' => $businessType === 'sale' ? 'sale_stock' : 'scrap_stock',
+            'product_type' => $productType,
+            'affects_finance' => false,
+            'affects_stock' => true,
+        ]);
     }
 
     public function snapshot(int $storeId, string $sectionType): array
