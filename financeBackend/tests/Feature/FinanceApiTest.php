@@ -4,12 +4,15 @@ namespace Tests\Feature;
 
 use App\Models\AdminUser;
 use App\Models\AuditLog;
+use App\Models\DailyReconciliation;
 use App\Models\OpeningBalance;
+use App\Models\ReconciliationSection;
 use App\Models\Store;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\AuditLogger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
@@ -780,5 +783,198 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('data.0.actor.id', $owner->id)
             ->assertJsonPath('data.0.store.id', $store->id);
         $this->assertDatabaseHas('audit_logs', ['action' => 'store.updated', 'subject_id' => $store->id]);
+    }
+
+    public function test_reconciliation_responsibility_and_blind_count(): void
+    {
+        Carbon::setTestNow('2026-07-01 20:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        OpeningBalance::query()->where('store_id', $store->id)->where('key', 'pure_gold_fund')->update(['value' => 10000]);
+
+        $goldStaff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '纯金员工',
+            'username' => 'gold-daily',
+            'email' => 'gold-daily@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'recycle_pure_gold'],
+            'api_token' => 'gold-daily-token',
+        ]);
+        $generalStaff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '综合员工',
+            'username' => 'general-daily',
+            'email' => 'general-daily@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'transactions'],
+            'api_token' => 'general-daily-token',
+        ]);
+
+        $this->withToken($goldStaff->api_token)
+            ->getJson('/api/admin/reconciliations/today')
+            ->assertOk()
+            ->assertJsonCount(1, 'sections')
+            ->assertJsonPath('sections.0.section_type', 'pure_gold')
+            ->assertJsonMissingPath('sections.0.book_snapshot');
+
+        $this->withToken($generalStaff->api_token)
+            ->getJson('/api/admin/reconciliations/today')
+            ->assertOk()
+            ->assertJsonCount(1, 'sections')
+            ->assertJsonPath('sections.0.section_type', 'general')
+            ->assertJsonMissingPath('sections.0.book_snapshot');
+    }
+
+    public function test_employee_submits_reconciliation_and_owner_reviews_each_section(): void
+    {
+        Carbon::setTestNow('2026-07-01 20:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'daily-owner-token'])->save();
+        $goldStaff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '纯金员工',
+            'username' => 'gold-submit',
+            'email' => 'gold-submit@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'recycle_pure_gold'],
+            'api_token' => 'gold-submit-token',
+        ]);
+        $generalStaff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '综合员工',
+            'username' => 'general-submit',
+            'email' => 'general-submit@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'transactions'],
+            'api_token' => 'general-submit-token',
+        ]);
+
+        $goldPayload = [
+            'no_business' => true,
+            'business_summary' => [],
+            'actual_snapshot' => [
+                'pure_gold_fund' => 0,
+                'scrap_pure_gold_weight' => 0,
+                'scrap_pure_gold_pieces' => 0,
+            ],
+        ];
+        $this->withToken($goldStaff->api_token)
+            ->postJson('/api/admin/reconciliations/today/pure_gold/submit', $goldPayload)
+            ->assertCreated()
+            ->assertJsonPath('status', 'submitted')
+            ->assertJsonPath('differences.pure_gold_fund', 0);
+
+        $generalPayload = [
+            'no_business' => true,
+            'business_summary' => [],
+            'actual_snapshot' => [
+                'cash' => 0,
+                'online_bank' => 0,
+                'online_wechat' => 0,
+                'online_alipay' => 0,
+                'sale_pure_gold_weight' => 0,
+                'sale_pure_gold_pieces' => 0,
+                'sale_pure_silver_weight' => 0,
+                'sale_pure_silver_pieces' => 0,
+                'sale_gold_wrapped_silver_gold_weight' => 0,
+                'sale_gold_wrapped_silver_silver_weight' => 0,
+                'sale_gold_wrapped_silver_pieces' => 0,
+                'scrap_pure_silver_weight' => 0,
+                'scrap_pure_silver_pieces' => 0,
+                'scrap_gold_wrapped_silver_gold_weight' => 0,
+                'scrap_gold_wrapped_silver_silver_weight' => 0,
+                'scrap_gold_wrapped_silver_pieces' => 0,
+            ],
+        ];
+        $this->withToken($generalStaff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', $generalPayload)
+            ->assertCreated()
+            ->assertJsonPath('status', 'submitted');
+
+        $report = DailyReconciliation::query()->with('sections')->sole();
+        $this->assertSame('submitted', $report->status);
+        $goldSection = $report->sections->firstWhere('section_type', 'pure_gold');
+        $generalSection = $report->sections->firstWhere('section_type', 'general');
+
+        $this->withToken($owner->api_token)
+            ->postJson('/api/admin/reconciliation-sections/'.$goldSection->id.'/confirm')
+            ->assertOk()
+            ->assertJsonPath('status', 'confirmed');
+        $this->withToken($owner->api_token)
+            ->postJson('/api/admin/reconciliation-sections/'.$generalSection->id.'/return', ['reason' => '重新核对现金'])
+            ->assertOk()
+            ->assertJsonPath('status', 'returned');
+
+        $this->assertDatabaseHas('audit_logs', ['action' => 'reconciliation.confirmed']);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'reconciliation.returned', 'reason' => '重新核对现金']);
+        $this->assertSame('returned', $report->fresh()->status);
+    }
+
+    public function test_reconciliation_difference_requires_reason_and_returned_section_can_resubmit(): void
+    {
+        Carbon::setTestNow('2026-07-01 20:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'resubmit-owner-token'])->save();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '综合员工',
+            'username' => 'general-resubmit',
+            'email' => 'general-resubmit@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['dashboard', 'transactions'],
+            'api_token' => 'general-resubmit-token',
+        ]);
+        $payload = [
+            'no_business' => true,
+            'business_summary' => [],
+            'actual_snapshot' => [
+                'cash' => 10,
+                'online_bank' => 0,
+                'online_wechat' => 0,
+                'online_alipay' => 0,
+                'sale_pure_gold_weight' => 0,
+                'sale_pure_gold_pieces' => 0,
+                'sale_pure_silver_weight' => 0,
+                'sale_pure_silver_pieces' => 0,
+                'sale_gold_wrapped_silver_gold_weight' => 0,
+                'sale_gold_wrapped_silver_silver_weight' => 0,
+                'sale_gold_wrapped_silver_pieces' => 0,
+                'scrap_pure_silver_weight' => 0,
+                'scrap_pure_silver_pieces' => 0,
+                'scrap_gold_wrapped_silver_gold_weight' => 0,
+                'scrap_gold_wrapped_silver_silver_weight' => 0,
+                'scrap_gold_wrapped_silver_pieces' => 0,
+            ],
+        ];
+
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', $payload)
+            ->assertStatus(422);
+        $created = $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', $payload + ['difference_reason' => '现金多出十元'])
+            ->assertCreated()
+            ->assertJsonPath('differences.cash', 10);
+
+        $section = ReconciliationSection::query()->findOrFail($created->json('id'));
+        $this->withToken($owner->api_token)
+            ->postJson('/api/admin/reconciliation-sections/'.$section->id.'/return', ['reason' => '重新清点'])
+            ->assertOk();
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', array_merge($payload, [
+                'actual_snapshot' => array_merge($payload['actual_snapshot'], ['cash' => 0]),
+            ]))
+            ->assertOk()
+            ->assertJsonPath('version', 2)
+            ->assertJsonPath('differences.cash', 0);
     }
 }

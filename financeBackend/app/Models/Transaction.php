@@ -12,6 +12,7 @@ class Transaction extends Model
         'user_id',
         'store_id',
         'recorded_by_admin_id',
+        'reconciliation_section_id',
         'business_type',
         'payment_account',
         'online_method',

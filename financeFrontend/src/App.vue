@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, Tickets, User, Wallet } from '@element-plus/icons-vue'
+import { Check, Coin, CreditCard, Delete, Edit, Menu as MenuIcon, Money, Plus, Refresh, Tickets, User, Wallet } from '@element-plus/icons-vue'
 import { api, formatMoney } from './api'
 
 const token = ref(localStorage.getItem('admin_token') || '')
@@ -49,6 +49,9 @@ const auditPagination = reactive({ page: 1, perPage: 50, total: 0 })
 const auditFilters = reactive({ action: '', date_from: '', date_to: '' })
 const auditDrawer = ref(false)
 const auditDetail = ref(null)
+const reconciliationToday = ref({ sections: [] })
+const reconciliationReports = ref([])
+const reconciliationLoading = ref(false)
 
 const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
@@ -58,6 +61,7 @@ const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || 
 const visibleMenus = computed(() => [
   { key: 'dashboard', label: '首页', icon: Wallet },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
+  { key: 'reconciliation', label: adminUser.value?.is_super_admin ? '每日交账' : '今日交账', icon: Check, visible: canUseTransactions.value },
   { key: 'opening', label: '期初', icon: Coin },
   { key: 'users', label: '用户管理', icon: User },
   { key: 'stores', label: '店铺管理', icon: Coin, visible: Boolean(adminUser.value?.is_super_admin) },
@@ -384,6 +388,7 @@ async function refresh() {
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('users')) tasks.push(loadUsers())
   if (adminUser.value?.is_super_admin && activeMenu.value === 'audit') tasks.push(loadAuditLogs())
+  if (activeMenu.value === 'reconciliation') tasks.push(loadReconciliations())
   await Promise.all(tasks)
 }
 
@@ -391,6 +396,108 @@ async function selectMenu(key) {
   activeMenu.value = key
   mobileMenu.value = false
   if (key === 'audit') await loadAuditLogs()
+  if (key === 'reconciliation') await loadReconciliations()
+}
+
+const reconciliationLabels = {
+  pure_gold_fund: '纯金回收资金',
+  scrap_pure_gold_weight: '回收纯金克重',
+  scrap_pure_gold_pieces: '回收纯金件数',
+  cash: '现金',
+  online_bank: '银行卡',
+  online_wechat: '微信',
+  online_alipay: '支付宝',
+  sale_pure_gold_weight: '销售纯金克重',
+  sale_pure_gold_pieces: '销售纯金件数',
+  sale_pure_silver_weight: '销售纯银克重',
+  sale_pure_silver_pieces: '销售纯银件数',
+  sale_gold_wrapped_silver_gold_weight: '销售金包银金重',
+  sale_gold_wrapped_silver_silver_weight: '销售金包银银重',
+  sale_gold_wrapped_silver_pieces: '销售金包银件数',
+  scrap_pure_silver_weight: '回收纯银克重',
+  scrap_pure_silver_pieces: '回收纯银件数',
+  scrap_gold_wrapped_silver_gold_weight: '回收金包银金重',
+  scrap_gold_wrapped_silver_silver_weight: '回收金包银银重',
+  scrap_gold_wrapped_silver_pieces: '回收金包银件数',
+}
+
+function reconciliationStatus(status) {
+  return {
+    pending: '未交账',
+    partial: '部分完成',
+    draft: '未提交',
+    submitted: '等待确认',
+    confirmed: '已确认',
+    returned: '已退回',
+  }[status] || status
+}
+
+function reconciliationStatusType(status) {
+  return { confirmed: 'success', returned: 'danger', submitted: 'warning', partial: 'warning' }[status] || 'info'
+}
+
+function initializeReconciliationSection(section) {
+  section.no_business = Boolean(section.no_business)
+  section.actual_snapshot ||= {}
+  section.difference_reason ||= ''
+  for (const field of section.fields || []) {
+    if (section.actual_snapshot[field] === undefined) section.actual_snapshot[field] = 0
+  }
+  return section
+}
+
+async function loadReconciliations() {
+  reconciliationLoading.value = true
+  try {
+    if (adminUser.value?.is_super_admin) {
+      const { data } = await api.get('/admin/reconciliations', {
+        params: { store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value },
+      })
+      reconciliationReports.value = data.data || []
+    } else {
+      const { data } = await api.get('/admin/reconciliations/today')
+      reconciliationToday.value = {
+        ...data,
+        sections: (data.sections || []).map(initializeReconciliationSection),
+      }
+    }
+  } finally {
+    reconciliationLoading.value = false
+  }
+}
+
+async function submitReconciliation(section) {
+  try {
+    const { data } = await api.post(`/admin/reconciliations/today/${section.section_type}/submit`, {
+      no_business: section.no_business,
+      business_summary: section.business_summary || [],
+      actual_snapshot: section.actual_snapshot,
+      difference_reason: section.difference_reason || null,
+    })
+    Object.assign(section, data)
+    ElMessage.success('今日交账已提交')
+    await loadReconciliations()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '提交失败')
+  }
+}
+
+async function confirmReconciliation(section) {
+  await api.post(`/admin/reconciliation-sections/${section.id}/confirm`)
+  ElMessage.success('已确认')
+  await loadReconciliations()
+}
+
+async function returnReconciliation(section) {
+  const { value } = await ElMessageBox.prompt('请填写需要员工重新核对的原因。', '退回交账', {
+    inputValidator: (text) => text?.trim().length >= 2 || '原因至少填写2个字符',
+    confirmButtonText: '退回',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+  await api.post(`/admin/reconciliation-sections/${section.id}/return`, { reason: value.trim() })
+  ElMessage.success('已退回')
+  await loadReconciliations()
 }
 
 async function changePage(page) {
@@ -831,6 +938,115 @@ onMounted(() => {
               @size-change="changePageSize"
             />
           </el-card>
+        </el-main>
+
+        <el-main v-if="activeMenu === 'reconciliation'" v-loading="reconciliationLoading">
+          <template v-if="!adminUser?.is_super_admin">
+            <el-alert
+              title="请按实际数量填写。提交前系统不会显示账面数字；提交后如有差额，需要说明原因。"
+              type="info"
+              :closable="false"
+            />
+            <section v-for="section in reconciliationToday.sections" :key="section.section_type" class="reconciliation-section">
+              <div class="reconciliation-heading">
+                <div>
+                  <h3>{{ section.section_type === 'pure_gold' ? '纯金回收交账' : '综合业务交账' }}</h3>
+                  <p>{{ reconciliationToday.date }} · {{ section.version > 1 ? `第${section.version}次提交` : '今日首次提交' }}</p>
+                </div>
+                <el-tag :type="reconciliationStatusType(section.status)">{{ reconciliationStatus(section.status) }}</el-tag>
+              </div>
+
+              <el-form label-position="top" class="reconciliation-form">
+                <el-checkbox v-model="section.no_business" :disabled="['submitted', 'confirmed'].includes(section.status)">今日无相关业务</el-checkbox>
+                <div class="reconciliation-grid">
+                  <el-form-item v-for="field in section.fields" :key="field" :label="reconciliationLabels[field]">
+                    <el-input-number
+                      v-model="section.actual_snapshot[field]"
+                      :disabled="['submitted', 'confirmed'].includes(section.status)"
+                      :precision="field.includes('pieces') ? 0 : field.includes('weight') ? 3 : 2"
+                      :min="0"
+                    />
+                  </el-form-item>
+                </div>
+                <el-form-item label="差额说明">
+                  <el-input
+                    v-model="section.difference_reason"
+                    type="textarea"
+                    :rows="2"
+                    :disabled="['submitted', 'confirmed'].includes(section.status)"
+                    placeholder="实盘与账面不一致时必须填写"
+                  />
+                </el-form-item>
+              </el-form>
+
+              <el-descriptions v-if="section.book_snapshot" :column="1" border class="section">
+                <el-descriptions-item v-for="(_, field) in section.book_snapshot" :key="field" :label="reconciliationLabels[field]">
+                  账面 {{ section.book_snapshot[field] }} / 实盘 {{ section.actual_snapshot[field] }} / 差额
+                  <strong :class="{ 'difference-value': Number(section.differences?.[field]) !== 0 }">{{ section.differences?.[field] }}</strong>
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <el-alert v-if="section.status === 'returned'" :title="`退回原因：${section.return_reason}`" type="error" :closable="false" />
+              <div class="reconciliation-actions">
+                <el-button
+                  type="primary"
+                  size="large"
+                  :disabled="['submitted', 'confirmed'].includes(section.status)"
+                  @click="submitReconciliation(section)"
+                >
+                  {{ section.status === 'returned' ? '重新提交' : '提交今日交账' }}
+                </el-button>
+              </div>
+            </section>
+          </template>
+
+          <template v-else>
+            <div class="reconciliation-owner-header">
+              <div>
+                <h3>每日交账</h3>
+                <p>每家店每天一份总结果，纯金和综合业务可分别处理。</p>
+              </div>
+              <el-button :icon="Refresh" @click="loadReconciliations">刷新</el-button>
+            </div>
+            <div class="table-scroll">
+              <el-table :data="reconciliationReports" stripe border row-key="id">
+                <el-table-column type="expand">
+                  <template #default="{ row }">
+                    <div class="reconciliation-expanded">
+                      <section v-for="section in row.sections" :key="section.id" class="review-section">
+                        <div class="reconciliation-heading">
+                          <div>
+                            <h4>{{ section.section_type === 'pure_gold' ? '纯金回收' : '综合业务' }}</h4>
+                            <p>提交人：{{ section.submitted_by?.name || '尚未提交' }}</p>
+                          </div>
+                          <el-tag :type="reconciliationStatusType(section.status)">{{ reconciliationStatus(section.status) }}</el-tag>
+                        </div>
+                        <el-descriptions v-if="section.book_snapshot" :column="1" border>
+                          <el-descriptions-item v-for="(_, field) in section.book_snapshot" :key="field" :label="reconciliationLabels[field]">
+                            账面 {{ section.book_snapshot[field] }} / 实盘 {{ section.actual_snapshot[field] }} / 差额
+                            <strong :class="{ 'difference-value': Number(section.differences?.[field]) !== 0 }">{{ section.differences?.[field] }}</strong>
+                          </el-descriptions-item>
+                          <el-descriptions-item label="员工说明">{{ section.difference_reason || '-' }}</el-descriptions-item>
+                        </el-descriptions>
+                        <div v-if="section.status === 'submitted'" class="reconciliation-actions">
+                          <el-button type="success" :icon="Check" @click="confirmReconciliation(section)">确认</el-button>
+                          <el-button type="danger" plain @click="returnReconciliation(section)">退回</el-button>
+                        </div>
+                      </section>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="date" label="日期" width="130" />
+                <el-table-column prop="store.name" label="店铺" min-width="160" />
+                <el-table-column label="状态" width="130">
+                  <template #default="{ row }"><el-tag :type="reconciliationStatusType(row.status)">{{ reconciliationStatus(row.status) }}</el-tag></template>
+                </el-table-column>
+                <el-table-column label="完成情况" min-width="220">
+                  <template #default="{ row }">{{ row.sections.length }} 个责任部分已有记录</template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </template>
         </el-main>
 
         <el-main v-if="activeMenu === 'opening'">
