@@ -38,6 +38,7 @@ const selectedStoreId = ref(localStorage.getItem('selected_store_id') || '')
 const userPagination = reactive({ page: 1, perPage: 50, total: 0 })
 const permissionOptions = ref({})
 const userDialog = ref(false)
+const userRole = ref('general')
 const passwordDialog = ref(false)
 const editingUserId = ref(null)
 const resetUserId = ref(null)
@@ -62,6 +63,11 @@ const reconciliationReports = ref([])
 const reconciliationHistory = ref([])
 const reconciliationLoading = ref(false)
 const reconciliationDraftTimers = new Map()
+const rolePresets = {
+  pure_gold: ['dashboard', 'recycle_pure_gold'],
+  general: ['dashboard', 'transactions'],
+  all_business: ['dashboard', 'transactions', 'recycle_pure_gold'],
+}
 
 const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
@@ -616,6 +622,7 @@ async function loadPermissionOptions() {
 
 function openCreateUser() {
   Object.assign(userForm, defaultUserForm())
+  userRole.value = 'general'
   editingUserId.value = null
   userDialog.value = true
 }
@@ -630,8 +637,19 @@ function openEditUser(row) {
     store_id: row.store_id,
     permissions: row.permissions || [],
   })
+  userRole.value = detectUserRole(row.permissions || [])
   editingUserId.value = row.id
   userDialog.value = true
+}
+
+function detectUserRole(permissions) {
+  if (permissions.includes('transactions') && permissions.includes('recycle_pure_gold')) return 'all_business'
+  if (permissions.includes('recycle_pure_gold')) return 'pure_gold'
+  return 'general'
+}
+
+function applyUserRole(role) {
+  userForm.permissions = [...rolePresets[role]]
 }
 
 async function saveUser() {
@@ -1468,10 +1486,12 @@ onBeforeUnmount(() => trendChart?.dispose())
         </el-form-item>
         <el-form-item v-if="!editingUserId" label="初始密码"><el-input v-model="userForm.password" type="password" show-password /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="userForm.enabled" /></el-form-item>
-        <el-form-item label="模块权限">
-          <el-checkbox-group v-model="userForm.permissions">
-            <el-checkbox v-for="(label, key) in permissionOptions" :key="key" :label="key" :disabled="key === 'users'">{{ label }}</el-checkbox>
-          </el-checkbox-group>
+        <el-form-item label="员工职责">
+          <el-radio-group v-model="userRole" @change="applyUserRole">
+            <el-radio-button value="pure_gold">纯金回收</el-radio-button>
+            <el-radio-button value="general">综合业务</el-radio-button>
+            <el-radio-button value="all_business">全店业务</el-radio-button>
+          </el-radio-group>
         </el-form-item>
       </el-form>
       <template #footer>

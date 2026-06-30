@@ -205,6 +205,14 @@ class TransactionController extends Controller
             $query->where('business_type', '!=', 'operating_expense');
         }
         if ($admin->hasPermission('transactions')) {
+            if (! $admin->hasPermission('recycle_pure_gold')) {
+                $query->where(function ($query): void {
+                    $query->where('business_type', '!=', 'recycle')
+                        ->orWhere('product_type', '!=', 'pure_gold')
+                        ->orWhereNull('product_type');
+                });
+            }
+
             return;
         }
 
@@ -227,6 +235,13 @@ class TransactionController extends Controller
     private function canCreateTransaction(AdminUser $admin, array $data): bool
     {
         if (! $admin->is_super_admin && ($data['business_type'] ?? null) === 'operating_expense') {
+            return false;
+        }
+        if (
+            ($data['business_type'] ?? null) === 'recycle'
+            && ($data['product_type'] ?? null) === 'pure_gold'
+            && ! $admin->hasPermission('recycle_pure_gold')
+        ) {
             return false;
         }
         if ($admin->hasPermission('transactions')) {

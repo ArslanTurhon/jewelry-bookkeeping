@@ -459,6 +459,40 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('data.0.wrap_material', 'silver');
     }
 
+    public function test_general_staff_cannot_create_or_read_pure_gold_recycle(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'general-scope-owner-token'])->save();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '综合员工',
+            'username' => 'general-scope',
+            'email' => 'general-scope@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'general-scope-token',
+        ]);
+        $payload = [
+            'business_type' => 'recycle',
+            'payment_account' => 'pure_gold_fund',
+            'amount' => 500,
+            'product_type' => 'pure_gold',
+            'pure_gold_weight' => 1,
+            'material_pieces' => 1,
+            'transaction_date' => '2026-07-01',
+        ];
+
+        $this->withToken($owner->api_token)->postJson('/api/admin/transactions', $payload)->assertCreated();
+        $this->withToken($staff->api_token)->postJson('/api/admin/transactions', $payload)->assertForbidden();
+        $this->withToken($staff->api_token)
+            ->getJson('/api/admin/transactions?product_type=pure_gold&business_type=recycle')
+            ->assertOk()
+            ->assertJsonPath('total', 0);
+    }
+
     public function test_super_admin_is_protected_from_user_management_changes(): void
     {
         $this->seed();
