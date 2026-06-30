@@ -13,6 +13,7 @@ return new class extends Migration
             $table->foreignId('store_id')->constrained()->cascadeOnDelete();
             $table->date('reconciliation_date');
             $table->string('status')->default('pending');
+            $table->json('required_sections')->nullable();
             $table->timestamps();
             $table->unique(['store_id', 'reconciliation_date']);
         });

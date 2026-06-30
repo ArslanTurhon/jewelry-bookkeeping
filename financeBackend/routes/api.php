@@ -51,7 +51,9 @@ Route::prefix('admin')->group(function (): void {
     Route::get('account-details', [AdminTransactionController::class, 'accountDetails']);
     Route::get('audit-logs', [AdminAuditLogController::class, 'index']);
     Route::get('reconciliations/today', [AdminReconciliationController::class, 'today']);
+    Route::put('reconciliations/today/{sectionType}/draft', [AdminReconciliationController::class, 'saveDraft']);
     Route::post('reconciliations/today/{sectionType}/submit', [AdminReconciliationController::class, 'submit']);
+    Route::get('reconciliations/mine', [AdminReconciliationController::class, 'mine']);
     Route::get('reconciliations', [AdminReconciliationController::class, 'index']);
     Route::post('reconciliation-sections/{section}/confirm', [AdminReconciliationController::class, 'confirm']);
     Route::post('reconciliation-sections/{section}/return', [AdminReconciliationController::class, 'returnSection']);

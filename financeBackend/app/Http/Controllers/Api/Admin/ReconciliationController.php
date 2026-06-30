@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AdminUser;
 use App\Models\DailyReconciliation;
 use App\Models\ReconciliationSection;
+use App\Models\Store;
 use App\Support\AdminAccess;
 use App\Support\AuditLogger;
 use App\Support\ReconciliationService;
@@ -22,7 +23,7 @@ class ReconciliationController extends Controller
             return $admin;
         }
 
-        $report = $this->reportFor($admin);
+        $report = $this->reportFor($admin, $service);
         $sections = collect($service->allowedSections($admin))->map(function (string $type) use ($report, $service): array {
             $section = $report->sections()->firstOrCreate(['section_type' => $type]);
 
@@ -35,6 +36,43 @@ class ReconciliationController extends Controller
             'status' => $report->status,
             'sections' => $sections,
         ]);
+    }
+
+    public function saveDraft(Request $request, string $sectionType, ReconciliationService $service)
+    {
+        $admin = AdminAccess::require($request);
+        if (! $admin instanceof AdminUser) {
+            return $admin;
+        }
+        if (! in_array($sectionType, $service->allowedSections($admin), true)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+        $data = $request->validate([
+            'no_business' => ['required', 'boolean'],
+            'business_summary' => ['nullable', 'array'],
+            'business_summary.*' => ['numeric', 'min:0'],
+            'actual_snapshot' => ['nullable', 'array'],
+            'actual_snapshot.*' => ['numeric', 'min:0'],
+            'difference_reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $section = DB::transaction(function () use ($admin, $sectionType, $service, $data): ReconciliationSection {
+            $report = $this->reportFor($admin, $service);
+            $section = $report->sections()->lockForUpdate()->firstOrCreate(['section_type' => $sectionType]);
+            if ($section->status !== 'draft') {
+                throw ValidationException::withMessages(['section' => '只有未提交交账可以保存草稿']);
+            }
+            $section->update([
+                'no_business' => $data['no_business'],
+                'business_summary' => $data['business_summary'] ?? [],
+                'actual_snapshot' => $data['actual_snapshot'] ?? [],
+                'difference_reason' => $data['difference_reason'] ?? null,
+            ]);
+
+            return $section->fresh();
+        });
+
+        return response()->json($this->presentSection($section, false));
     }
 
     public function submit(
@@ -63,7 +101,7 @@ class ReconciliationController extends Controller
         }
 
         $result = DB::transaction(function () use ($admin, $sectionType, $service, $audit, $data): array {
-            $report = $this->reportFor($admin);
+            $report = $this->reportFor($admin, $service);
             $section = $report->sections()->lockForUpdate()->firstOrCreate(['section_type' => $sectionType]);
             if (in_array($section->status, ['submitted', 'confirmed'], true)) {
                 throw ValidationException::withMessages(['section' => '该部分已经提交']);
@@ -118,11 +156,42 @@ class ReconciliationController extends Controller
         if (! $admin->is_super_admin) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
+        $date = $request->filled('date')
+            ? $request->date('date')->format('Y-m-d')
+            : $this->businessDate();
+        $service = app(ReconciliationService::class);
+        Store::query()->where('enabled', true)->each(function (Store $store) use ($date, $service): void {
+            $this->reportForStore($store->id, $date, $service);
+        });
 
         $reports = DailyReconciliation::query()
             ->with(['store', 'sections.submitter', 'sections.reviewer'])
             ->when($request->filled('store_id'), fn ($query) => $query->where('store_id', $request->integer('store_id')))
             ->when($request->filled('date'), fn ($query) => $query->whereDate('reconciliation_date', $request->date('date')))
+            ->latest('reconciliation_date')
+            ->get()
+            ->map(fn (DailyReconciliation $report) => $this->presentReport($report));
+
+        return response()->json(['data' => $reports]);
+    }
+
+    public function mine(Request $request, ReconciliationService $service)
+    {
+        $admin = AdminAccess::require($request);
+        if (! $admin instanceof AdminUser) {
+            return $admin;
+        }
+        abort_unless($admin->store_id, 422, '员工必须归属店铺');
+        $allowed = $service->allowedSections($admin);
+        $reports = DailyReconciliation::query()
+            ->where('store_id', $admin->store_id)
+            ->whereHas('sections', fn ($query) => $query->whereIn('section_type', $allowed))
+            ->with([
+                'store',
+                'sections' => fn ($query) => $query->whereIn('section_type', $allowed),
+                'sections.submitter',
+                'sections.reviewer',
+            ])
             ->latest('reconciliation_date')
             ->get()
             ->map(fn (DailyReconciliation $report) => $this->presentReport($report));
@@ -178,14 +247,27 @@ class ReconciliationController extends Controller
         return response()->json($this->presentSection($section->fresh(), true));
     }
 
-    private function reportFor(AdminUser $admin): DailyReconciliation
+    private function reportFor(AdminUser $admin, ReconciliationService $service): DailyReconciliation
     {
         abort_unless($admin->store_id, 422, '员工必须归属店铺');
 
-        return DailyReconciliation::query()->firstOrCreate([
-            'store_id' => $admin->store_id,
-            'reconciliation_date' => $this->businessDate(),
-        ]);
+        return $this->reportForStore($admin->store_id, $this->businessDate(), $service);
+    }
+
+    private function reportForStore(int $storeId, string $date, ReconciliationService $service): DailyReconciliation
+    {
+        $report = DailyReconciliation::query()->firstOrCreate(
+            ['store_id' => $storeId, 'reconciliation_date' => $date],
+            ['required_sections' => $service->requiredSectionsForStore($storeId)],
+        );
+        if ($report->required_sections === null) {
+            $report->update(['required_sections' => $service->requiredSectionsForStore($storeId)]);
+        }
+        foreach ($report->required_sections ?? [] as $type) {
+            $report->sections()->firstOrCreate(['section_type' => $type]);
+        }
+
+        return $report->fresh();
     }
 
     private function businessDate(): string

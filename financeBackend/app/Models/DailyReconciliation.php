@@ -8,11 +8,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class DailyReconciliation extends Model
 {
-    protected $fillable = ['store_id', 'reconciliation_date', 'status'];
+    protected $fillable = ['store_id', 'reconciliation_date', 'status', 'required_sections'];
 
     protected function casts(): array
     {
-        return ['reconciliation_date' => 'date:Y-m-d'];
+        return [
+            'reconciliation_date' => 'date:Y-m-d',
+            'required_sections' => 'array',
+        ];
     }
 
     public function store(): BelongsTo
@@ -28,16 +31,7 @@ class DailyReconciliation extends Model
     public function recalculateStatus(): void
     {
         $sections = $this->sections()->get();
-        $required = [];
-        $staff = AdminUser::query()->where('store_id', $this->store_id)->where('enabled', true)->get();
-
-        if ($staff->contains(fn (AdminUser $user) => $user->hasPermission('recycle_pure_gold'))) {
-            $required[] = 'pure_gold';
-        }
-        if ($staff->contains(fn (AdminUser $user) => $user->hasPermission('transactions'))) {
-            $required[] = 'general';
-        }
-        $required = $required ?: $sections->pluck('section_type')->all();
+        $required = $this->required_sections ?: $sections->pluck('section_type')->all();
         $requiredSections = collect($required)->map(fn (string $type) => $sections->firstWhere('section_type', $type));
 
         $status = match (true) {

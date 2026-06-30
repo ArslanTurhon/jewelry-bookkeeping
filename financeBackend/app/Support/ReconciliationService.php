@@ -25,6 +25,23 @@ class ReconciliationService
         return $sections;
     }
 
+    public function requiredSectionsForStore(int $storeId): array
+    {
+        $staff = AdminUser::query()
+            ->where('store_id', $storeId)
+            ->where('enabled', true)
+            ->get();
+        $sections = [];
+        if ($staff->contains(fn (AdminUser $user) => $user->hasPermission('recycle_pure_gold'))) {
+            $sections[] = 'pure_gold';
+        }
+        if ($staff->contains(fn (AdminUser $user) => $user->hasPermission('transactions'))) {
+            $sections[] = 'general';
+        }
+
+        return $sections;
+    }
+
     public function fieldDefinitions(string $sectionType): array
     {
         return $sectionType === 'pure_gold'

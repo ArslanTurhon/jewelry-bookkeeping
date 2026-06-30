@@ -51,7 +51,9 @@ const auditDrawer = ref(false)
 const auditDetail = ref(null)
 const reconciliationToday = ref({ sections: [] })
 const reconciliationReports = ref([])
+const reconciliationHistory = ref([])
 const reconciliationLoading = ref(false)
+const reconciliationDraftTimers = new Map()
 
 const isAuthed = computed(() => Boolean(token.value))
 const hasPermission = (permission) => adminUser.value?.is_super_admin || adminUser.value?.permissions?.includes(permission)
@@ -225,6 +227,7 @@ async function login() {
     activeMenu.value = data.admin.is_super_admin ? 'dashboard' : 'reconciliation'
     reconciliationToday.value = { sections: [] }
     reconciliationReports.value = []
+    reconciliationHistory.value = []
     localStorage.setItem('admin_token', data.token)
     localStorage.setItem('admin_user', JSON.stringify(data.admin))
     await loadAll()
@@ -244,6 +247,7 @@ function logout() {
   activeMenu.value = 'dashboard'
   reconciliationToday.value = { sections: [] }
   reconciliationReports.value = []
+  reconciliationHistory.value = []
 }
 
 async function loadAll() {
@@ -462,14 +466,38 @@ async function loadReconciliations() {
       })
       reconciliationReports.value = data.data || []
     } else {
-      const { data } = await api.get('/admin/reconciliations/today')
+      const [{ data }, { data: history }] = await Promise.all([
+        api.get('/admin/reconciliations/today'),
+        api.get('/admin/reconciliations/mine'),
+      ])
       reconciliationToday.value = {
         ...data,
         sections: (data.sections || []).map(initializeReconciliationSection),
       }
+      reconciliationHistory.value = history.data || []
     }
   } finally {
     reconciliationLoading.value = false
+  }
+}
+
+function scheduleReconciliationDraft(section) {
+  if (section.status !== 'draft') return
+  clearTimeout(reconciliationDraftTimers.get(section.section_type))
+  reconciliationDraftTimers.set(section.section_type, setTimeout(() => saveReconciliationDraft(section), 600))
+}
+
+async function saveReconciliationDraft(section) {
+  try {
+    const { data } = await api.put(`/admin/reconciliations/today/${section.section_type}/draft`, {
+      no_business: section.no_business,
+      business_summary: section.business_summary || [],
+      actual_snapshot: section.actual_snapshot,
+      difference_reason: section.difference_reason || null,
+    })
+    Object.assign(section, data, { fields: section.fields })
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '草稿保存失败')
   }
 }
 
@@ -964,7 +992,13 @@ onMounted(() => {
               </div>
 
               <el-form label-position="top" class="reconciliation-form">
-                <el-checkbox v-model="section.no_business" :disabled="['submitted', 'confirmed'].includes(section.status)">今日无相关业务</el-checkbox>
+                <el-checkbox
+                  v-model="section.no_business"
+                  :disabled="['submitted', 'confirmed'].includes(section.status)"
+                  @change="scheduleReconciliationDraft(section)"
+                >
+                  今日无相关业务
+                </el-checkbox>
                 <div class="reconciliation-grid">
                   <el-form-item v-for="field in section.fields" :key="field" :label="reconciliationLabels[field]">
                     <el-input-number
@@ -972,6 +1006,7 @@ onMounted(() => {
                       :disabled="['submitted', 'confirmed'].includes(section.status)"
                       :precision="field.includes('pieces') ? 0 : field.includes('weight') ? 3 : 2"
                       :min="0"
+                      @change="scheduleReconciliationDraft(section)"
                     />
                   </el-form-item>
                 </div>
@@ -982,6 +1017,7 @@ onMounted(() => {
                     :rows="2"
                     :disabled="['submitted', 'confirmed'].includes(section.status)"
                     placeholder="实盘与账面不一致时必须填写"
+                    @input="scheduleReconciliationDraft(section)"
                   />
                 </el-form-item>
               </el-form>
@@ -1003,6 +1039,26 @@ onMounted(() => {
                 >
                   {{ section.status === 'returned' ? '重新提交' : '提交今日交账' }}
                 </el-button>
+              </div>
+            </section>
+            <section class="reconciliation-section">
+              <div class="reconciliation-heading">
+                <div>
+                  <h3>交账历史</h3>
+                  <p>最近的提交、确认和退回结果</p>
+                </div>
+              </div>
+              <div class="table-scroll">
+                <el-table :data="reconciliationHistory" stripe>
+                  <el-table-column prop="date" label="日期" width="130" />
+                  <el-table-column prop="store.name" label="店铺" min-width="150" />
+                  <el-table-column label="状态" width="120">
+                    <template #default="{ row }"><el-tag :type="reconciliationStatusType(row.status)">{{ reconciliationStatus(row.status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="交账部分" min-width="180">
+                    <template #default="{ row }">{{ row.sections.map((item) => item.section_type === 'pure_gold' ? '纯金回收' : '综合业务').join('、') }}</template>
+                  </el-table-column>
+                </el-table>
               </div>
             </section>
           </template>

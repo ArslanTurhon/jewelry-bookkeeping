@@ -852,6 +852,112 @@ class FinanceApiTest extends TestCase
             ->assertJsonMissingPath('sections.0.book_snapshot');
     }
 
+    public function test_employee_can_save_reconciliation_draft_and_read_own_history(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '草稿员工',
+            'username' => 'draft-staff',
+            'email' => 'draft-staff@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'draft-staff-token',
+        ]);
+
+        $this->withToken($staff->api_token)
+            ->putJson('/api/admin/reconciliations/today/general/draft', [
+                'no_business' => false,
+                'business_summary' => ['sales_amount' => 1200],
+                'actual_snapshot' => ['cash' => 600],
+                'difference_reason' => '尚未盘完',
+            ])
+            ->assertOk()
+            ->assertJsonPath('status', 'draft')
+            ->assertJsonPath('actual_snapshot.cash', 600)
+            ->assertJsonMissingPath('book_snapshot');
+
+        $this->withToken($staff->api_token)
+            ->getJson('/api/admin/reconciliations/today')
+            ->assertOk()
+            ->assertJsonPath('sections.0.business_summary.sales_amount', 1200)
+            ->assertJsonPath('sections.0.actual_snapshot.cash', 600)
+            ->assertJsonMissingPath('sections.0.book_snapshot');
+
+        $this->withToken($staff->api_token)
+            ->getJson('/api/admin/reconciliations/mine')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.store.id', $store->id)
+            ->assertJsonPath('data.0.sections.0.submitted_by', null);
+    }
+
+    public function test_owner_sees_pending_reports_before_staff_open_the_page(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $defaultStore = Store::query()->where('is_default', true)->sole();
+        $secondStore = Store::query()->create(['name' => '二店', 'enabled' => true]);
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'pending-owner-token'])->save();
+
+        foreach ([
+            [$defaultStore, 'pending-general', ['transactions']],
+            [$secondStore, 'pending-all', ['transactions', 'recycle_pure_gold']],
+        ] as [$store, $username, $permissions]) {
+            AdminUser::query()->create([
+                'store_id' => $store->id,
+                'name' => $username,
+                'username' => $username,
+                'email' => $username.'@example.test',
+                'password' => 'password',
+                'enabled' => true,
+                'permissions' => $permissions,
+            ]);
+        }
+
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/reconciliations?date=2026-07-01')
+            ->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.status', 'pending')
+            ->assertJsonPath('data.1.status', 'pending');
+
+        $this->assertDatabaseCount('daily_reconciliations', 2);
+        $this->assertDatabaseCount('reconciliation_sections', 3);
+    }
+
+    public function test_reconciliation_required_sections_are_frozen_for_the_day(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '双职责员工',
+            'username' => 'frozen-sections',
+            'email' => 'frozen-sections@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions', 'recycle_pure_gold'],
+            'api_token' => 'frozen-sections-token',
+        ]);
+
+        $this->withToken($staff->api_token)->getJson('/api/admin/reconciliations/today')->assertOk();
+        $report = DailyReconciliation::query()->sole();
+        $this->assertSame(['pure_gold', 'general'], $report->required_sections);
+
+        $staff->update(['permissions' => ['transactions']]);
+        $report->sections()->where('section_type', 'general')->update(['status' => 'confirmed']);
+        $report->recalculateStatus();
+
+        $this->assertSame('partial', $report->fresh()->status);
+        $this->assertSame(['pure_gold', 'general'], $report->fresh()->required_sections);
+    }
+
     public function test_employee_submits_reconciliation_and_owner_reviews_each_section(): void
     {
         Carbon::setTestNow('2026-07-01 20:00:00');
