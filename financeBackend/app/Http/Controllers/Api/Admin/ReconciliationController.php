@@ -30,7 +30,7 @@ class ReconciliationController extends Controller
         });
 
         return response()->json([
-            'date' => now()->toDateString(),
+            'date' => $this->businessDate(),
             'store_id' => $admin->store_id,
             'status' => $report->status,
             'sections' => $sections,
@@ -184,8 +184,13 @@ class ReconciliationController extends Controller
 
         return DailyReconciliation::query()->firstOrCreate([
             'store_id' => $admin->store_id,
-            'reconciliation_date' => now()->toDateString(),
+            'reconciliation_date' => $this->businessDate(),
         ]);
+    }
+
+    private function businessDate(): string
+    {
+        return now('Asia/Shanghai')->toDateString();
     }
 
     private function presentReport(DailyReconciliation $report): array

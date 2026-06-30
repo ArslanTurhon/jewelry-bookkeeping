@@ -222,6 +222,9 @@ async function login() {
     const { data } = await api.post('/admin/login', loginForm)
     token.value = data.token
     adminUser.value = data.admin
+    activeMenu.value = 'dashboard'
+    reconciliationToday.value = { sections: [] }
+    reconciliationReports.value = []
     localStorage.setItem('admin_token', data.token)
     localStorage.setItem('admin_user', JSON.stringify(data.admin))
     await loadAll()
@@ -238,6 +241,9 @@ function logout() {
   localStorage.removeItem('admin_user')
   token.value = ''
   adminUser.value = null
+  activeMenu.value = 'dashboard'
+  reconciliationToday.value = { sections: [] }
+  reconciliationReports.value = []
 }
 
 async function loadAll() {
