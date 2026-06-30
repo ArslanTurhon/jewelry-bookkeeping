@@ -295,7 +295,7 @@ class FinanceApiTest extends TestCase
         ]);
         $staff->forceFill(['api_token' => 'staff-token'])->save();
 
-        $this->withToken('staff-token')->getJson('/api/admin/stats/current?month=2026-06')->assertOk();
+        $this->withToken('staff-token')->getJson('/api/admin/stats/current?month=2026-06')->assertForbidden();
         $this->withToken('staff-token')->getJson('/api/admin/transactions')->assertForbidden();
         $this->withToken('staff-token')->getJson('/api/admin/users')->assertForbidden();
 
@@ -641,12 +641,36 @@ class FinanceApiTest extends TestCase
         $this->withToken('expense-staff-token')->postJson('/api/admin/transactions', $expense)->assertForbidden();
         $this->withToken('expense-staff-token')
             ->getJson('/api/admin/stats/current?month=2026-06')
-            ->assertOk()
-            ->assertJsonMissingPath('monthly.operating_expenses')
-            ->assertJsonMissingPath('monthly.net');
+            ->assertForbidden();
         $this->withToken('expense-staff-token')
             ->getJson('/api/admin/account-details?account=cash')
             ->assertForbidden();
+    }
+
+    public function test_staff_stats_do_not_expose_owner_financial_snapshot(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+
+        foreach ([
+            ['name' => '纯金员工', 'username' => 'stats-gold', 'permissions' => ['dashboard', 'recycle_pure_gold'], 'token' => 'stats-gold-token'],
+            ['name' => '综合员工', 'username' => 'stats-general', 'permissions' => ['dashboard', 'transactions'], 'token' => 'stats-general-token'],
+        ] as $account) {
+            AdminUser::query()->create([
+                'store_id' => $store->id,
+                'name' => $account['name'],
+                'username' => $account['username'],
+                'email' => $account['username'].'@example.test',
+                'password' => 'password',
+                'enabled' => true,
+                'permissions' => $account['permissions'],
+                'api_token' => $account['token'],
+            ]);
+
+            $this->withToken($account['token'])
+                ->getJson('/api/admin/stats/current?month=2026-07')
+                ->assertForbidden();
+        }
     }
 
     public function test_audit_logger_records_safe_before_and_after_snapshots(): void

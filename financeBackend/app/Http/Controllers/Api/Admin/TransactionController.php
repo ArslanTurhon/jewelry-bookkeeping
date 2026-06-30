@@ -146,14 +146,14 @@ class TransactionController extends Controller
         if (! $admin instanceof AdminUser) {
             return $admin;
         }
+        if (! $admin->is_super_admin) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
         $data = $stats->current(
             null,
             $request->string('month', now()->format('Y-m'))->toString(),
             $stores->readableStoreId($admin, $request),
         );
-        if (! $admin->is_super_admin) {
-            unset($data['monthly']['operating_expenses'], $data['monthly']['net']);
-        }
 
         return response()->json($data);
     }

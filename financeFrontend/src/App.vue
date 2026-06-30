@@ -8,7 +8,7 @@ const token = ref(localStorage.getItem('admin_token') || '')
 const adminUser = ref(JSON.parse(localStorage.getItem('admin_user') || 'null'))
 const loginForm = reactive({ account: '', password: '' })
 const loading = ref(false)
-const activeMenu = ref('dashboard')
+const activeMenu = ref(adminUser.value?.is_super_admin ? 'dashboard' : 'reconciliation')
 const mobileMenu = ref(false)
 const month = ref(today().slice(0, 7))
 const stats = ref(null)
@@ -59,7 +59,7 @@ const canUseTransactions = computed(() => hasPermission('transactions') || hasPe
 const canEditTransactions = computed(() => Boolean(adminUser.value?.is_super_admin))
 const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || selectedStoreId.value !== 'all')
 const visibleMenus = computed(() => [
-  { key: 'dashboard', label: '首页', icon: Wallet },
+  { key: 'dashboard', label: '首页', icon: Wallet, visible: Boolean(adminUser.value?.is_super_admin) },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
   { key: 'reconciliation', label: adminUser.value?.is_super_admin ? '每日交账' : '今日交账', icon: Check, visible: canUseTransactions.value },
   { key: 'opening', label: '期初', icon: Coin },
@@ -222,7 +222,7 @@ async function login() {
     const { data } = await api.post('/admin/login', loginForm)
     token.value = data.token
     adminUser.value = data.admin
-    activeMenu.value = 'dashboard'
+    activeMenu.value = data.admin.is_super_admin ? 'dashboard' : 'reconciliation'
     reconciliationToday.value = { sections: [] }
     reconciliationReports.value = []
     localStorage.setItem('admin_token', data.token)
@@ -253,12 +253,13 @@ async function loadAll() {
     localStorage.setItem('selected_store_id', selectedStoreId.value)
   }
   const tasks = [loadI18n()]
-  if (hasPermission('dashboard')) tasks.push(loadStats())
+  if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('opening')) tasks.push(loadOpening())
   if (hasPermission('recycle_price')) tasks.push(loadRecyclePrice(today()))
   if (hasPermission('users')) tasks.push(loadUsers(), loadPermissionOptions())
   await Promise.all(tasks)
+  if (activeMenu.value === 'reconciliation') await loadReconciliations()
   if (!visibleMenus.value.some((item) => item.key === activeMenu.value)) {
     activeMenu.value = visibleMenus.value[0]?.key || ''
   }
@@ -390,7 +391,7 @@ async function saveOpening() {
 async function refresh() {
   pagination.page = 1
   const tasks = []
-  if (hasPermission('dashboard')) tasks.push(loadStats())
+  if (adminUser.value?.is_super_admin) tasks.push(loadStats())
   if (canUseTransactions.value) tasks.push(loadTransactions())
   if (hasPermission('users')) tasks.push(loadUsers())
   if (adminUser.value?.is_super_admin && activeMenu.value === 'audit') tasks.push(loadAuditLogs())
