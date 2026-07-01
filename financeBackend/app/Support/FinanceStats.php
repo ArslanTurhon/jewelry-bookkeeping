@@ -11,6 +11,7 @@ use App\Models\ScrapOutbound;
 use App\Models\Store;
 use App\Models\Transaction;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 
 class FinanceStats
 {
@@ -45,8 +46,13 @@ class FinanceStats
         'scrap_stock.gold_wrapped_copper.pieces' => 0,
     ];
 
-    public function current(?int $userId = null, ?string $month = null, ?int $storeId = null): array
-    {
+    public function current(
+        ?int $userId = null,
+        ?string $month = null,
+        ?int $storeId = null,
+        ?string $activityDate = null,
+        ?int $adminUserId = null,
+    ): array {
         $records = Transaction::query()
             ->active()
             ->when($userId, fn (Builder $query) => $query->where('user_id', $userId))
@@ -151,7 +157,7 @@ class FinanceStats
         $monthlyExpenses = (float) $financialMonthly->where('business_type', 'operating_expense')->sum('amount');
         $onlineTotal = array_sum($online);
         $total = $cash + $onlineTotal + $pureGoldFund;
-        $dashboard = $this->dashboardSummary($records, $exchanges, $storeId);
+        $dashboard = $this->dashboardSummary($records, $exchanges, $storeId, $activityDate, $adminUserId);
 
         return [
             'cash' => round($cash, 2),
@@ -177,16 +183,34 @@ class FinanceStats
         ];
     }
 
-    private function dashboardSummary($records, $exchanges, ?int $storeId): array
-    {
-        $today = now('Asia/Shanghai')->toDateString();
-        $start = now('Asia/Shanghai')->subDays(6)->startOfDay();
-        $todayRecords = $records->filter(
+    private function dashboardSummary(
+        $records,
+        $exchanges,
+        ?int $storeId,
+        ?string $activityDate,
+        ?int $adminUserId,
+    ): array {
+        $target = $activityDate
+            ? Carbon::createFromFormat('Y-m-d', $activityDate, 'Asia/Shanghai')->startOfDay()
+            : now('Asia/Shanghai')->startOfDay();
+        $today = $target->toDateString();
+        $start = $target->copy()->subDays(6);
+        $activityRecords = $records->when(
+            $adminUserId,
+            fn ($records) => $records->where('recorded_by_admin_id', $adminUserId),
+        );
+        $activityExchanges = $exchanges->when(
+            $adminUserId,
+            fn ($exchanges) => $exchanges->where('recorded_by_admin_id', $adminUserId),
+        );
+        $todayRecords = $activityRecords->filter(
             fn (Transaction $record) => $record->affects_finance && $record->transaction_date->format('Y-m-d') === $today,
         );
-        $todayExchanges = $exchanges->filter(fn (Exchange $exchange) => $exchange->exchange_date->format('Y-m-d') === $today);
-        $trendRecords = $records->filter(
-            fn (Transaction $record) => $record->affects_finance && $record->transaction_date->gte($start),
+        $todayExchanges = $activityExchanges->filter(fn (Exchange $exchange) => $exchange->exchange_date->format('Y-m-d') === $today);
+        $trendRecords = $activityRecords->filter(
+            fn (Transaction $record) => $record->affects_finance
+                && $record->transaction_date->format('Y-m-d') >= $start->toDateString()
+                && $record->transaction_date->format('Y-m-d') <= $today,
         );
         $reports = DailyReconciliation::query()
             ->whereDate('reconciliation_date', $today)
@@ -205,7 +229,9 @@ class FinanceStats
                 $query->whereDate('reconciliation_date', $today)
                     ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId));
             })
+            ->when($adminUserId, fn (Builder $query) => $query->where('submitted_by_admin_id', $adminUserId))
             ->get();
+        $employeeSections = $adminUserId ? $differenceSections : null;
         $cashDifference = 0.0;
         $metalDifference = 0.0;
         foreach ($differenceSections as $section) {
@@ -226,13 +252,17 @@ class FinanceStats
                 'operating_expenses' => round((float) $todayRecords->where('business_type', 'operating_expense')->sum('amount'), 2),
             ],
             'anomalies' => [
-                'unsubmitted' => $storeIds->diff($reports->whereIn('status', ['submitted', 'confirmed'])->pluck('store_id'))->count(),
+                'unsubmitted' => $employeeSections
+                    ? ($employeeSections->whereIn('status', ['submitted', 'confirmed'])->isEmpty() ? 1 : 0)
+                    : $storeIds->diff($reports->whereIn('status', ['submitted', 'confirmed'])->pluck('store_id'))->count(),
                 'cash_difference' => round($cashDifference, 2),
                 'metal_difference' => round($metalDifference, 3),
-                'returned' => $reports->where('status', 'returned')->count(),
+                'returned' => $employeeSections
+                    ? $employeeSections->where('status', 'returned')->count()
+                    : $reports->where('status', 'returned')->count(),
             ],
-            'trend_7_days' => collect(range(6, 0))->map(function (int $daysAgo) use ($trendRecords): array {
-                $date = now('Asia/Shanghai')->subDays($daysAgo)->toDateString();
+            'trend_7_days' => collect(range(6, 0))->map(function (int $daysAgo) use ($trendRecords, $target): array {
+                $date = $target->copy()->subDays($daysAgo)->toDateString();
                 $day = $trendRecords->filter(fn (Transaction $record) => $record->transaction_date->format('Y-m-d') === $date);
 
                 return [

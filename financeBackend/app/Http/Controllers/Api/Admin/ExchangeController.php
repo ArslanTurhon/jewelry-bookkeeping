@@ -25,6 +25,16 @@ class ExchangeController extends Controller
 
         $query = Exchange::query()->with('recorder')->latest('exchange_date')->latest('id');
         $stores->scope($query, $admin, $request);
+        $request->validate([
+            'date' => ['nullable', 'date'],
+            'admin_user_id' => ['nullable', 'integer', 'exists:admin_users,id'],
+        ]);
+        $query
+            ->when($request->filled('date'), fn ($query) => $query->whereDate('exchange_date', $request->string('date')))
+            ->when(
+                $admin->is_super_admin && $request->filled('admin_user_id'),
+                fn ($query) => $query->where('recorded_by_admin_id', $request->integer('admin_user_id')),
+            );
 
         return response()->json($query->paginate($request->integer('per_page', 50)));
     }

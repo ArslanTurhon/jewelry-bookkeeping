@@ -345,6 +345,11 @@ body {
   margin-bottom: 18px;
 }
 
+.reconciliation-owner-filters {
+  display: flex;
+  gap: 10px;
+}
+
 .reconciliation-heading h3,
 .reconciliation-heading h4,
 .reconciliation-owner-header h3 {
@@ -612,6 +617,11 @@ body {
 
   .reconciliation-heading,
   .reconciliation-owner-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .reconciliation-owner-filters {
     align-items: stretch;
     flex-direction: column;
   }

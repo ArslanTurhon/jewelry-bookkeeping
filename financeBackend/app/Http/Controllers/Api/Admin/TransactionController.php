@@ -33,6 +33,9 @@ class TransactionController extends Controller
         $query = Transaction::query()->with('user')->latest('transaction_date')->latest('id');
         $stores->scope($query, $admin, $request);
         $this->applyReadableScope($query, $admin);
+        if ($admin->is_super_admin && $request->filled('admin_user_id')) {
+            $query->where('recorded_by_admin_id', $request->integer('admin_user_id'));
+        }
         match ($request->string('status', 'active')->toString()) {
             'all' => null,
             'voided' => $query->whereNotNull('voided_at'),
@@ -149,10 +152,16 @@ class TransactionController extends Controller
         if (! $admin->is_super_admin) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
+        $filters = $request->validate([
+            'date' => ['nullable', 'date_format:Y-m-d'],
+            'admin_user_id' => ['nullable', 'integer', Rule::exists('admin_users', 'id')],
+        ]);
         $data = $stats->current(
             null,
             $request->string('month', now()->format('Y-m'))->toString(),
             $stores->readableStoreId($admin, $request),
+            $filters['date'] ?? null,
+            $filters['admin_user_id'] ?? null,
         );
 
         return response()->json($data);

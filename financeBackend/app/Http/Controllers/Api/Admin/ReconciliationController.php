@@ -187,11 +187,19 @@ class ReconciliationController extends Controller
         Store::query()->where('enabled', true)->each(function (Store $store) use ($date, $service): void {
             $this->reportForStore($store->id, $date, $service);
         });
+        $employee = $request->filled('admin_user_id')
+            ? AdminUser::query()->where('is_super_admin', false)->findOrFail($request->integer('admin_user_id'))
+            : null;
+        $employeeSections = $employee ? $service->allowedSections($employee) : [];
 
         $reports = DailyReconciliation::query()
             ->with(['store', 'sections.submitter', 'sections.reviewer'])
             ->when($request->filled('store_id'), fn ($query) => $query->where('store_id', $request->integer('store_id')))
             ->when($request->filled('date'), fn ($query) => $query->whereDate('reconciliation_date', $request->date('date')))
+            ->when($employee, function ($query) use ($employee, $employeeSections): void {
+                $query->where('store_id', $employee->store_id)
+                    ->whereHas('sections', fn ($query) => $query->whereIn('section_type', $employeeSections));
+            })
             ->latest('reconciliation_date')
             ->get()
             ->map(fn (DailyReconciliation $report) => $this->presentReport($report));

@@ -443,6 +443,101 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('trend_7_days.6.recycle', 500);
     }
 
+    public function test_owner_dashboard_filters_activity_by_date_and_recorder_without_changing_store_balance(): void
+    {
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $owner = AdminUser::query()->where('is_super_admin', true)->sole();
+        $owner->forceFill(['api_token' => 'filter-owner-token'])->save();
+        $first = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '员工甲',
+            'username' => 'filter-first',
+            'email' => 'filter-first@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+        ]);
+        $second = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '员工乙',
+            'username' => 'filter-second',
+            'email' => 'filter-second@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+        ]);
+        $user = User::query()->firstOrCreate(['openid' => 'filter-user'], ['name' => '筛选测试']);
+        foreach ([
+            [$first->id, '2026-06-30', 100],
+            [$first->id, '2026-07-01', 200],
+            [$second->id, '2026-07-01', 300],
+        ] as [$recorder, $date, $amount]) {
+            Transaction::query()->create([
+                'store_id' => $store->id,
+                'user_id' => $user->id,
+                'recorded_by_admin_id' => $recorder,
+                'business_type' => 'sale',
+                'payment_account' => 'cash',
+                'amount' => $amount,
+                'transaction_date' => $date,
+            ]);
+        }
+        foreach ([
+            [$first->id, '2026-07-01', 50],
+            [$second->id, '2026-07-01', 75],
+        ] as [$recorder, $date, $amount]) {
+            Exchange::query()->create([
+                'store_id' => $store->id,
+                'recorded_by_admin_id' => $recorder,
+                'direction' => 'cash_in',
+                'online_method' => 'wechat',
+                'amount' => $amount,
+                'fee' => 0,
+                'exchange_date' => $date,
+            ]);
+        }
+        $report = DailyReconciliation::query()->create([
+            'store_id' => $store->id,
+            'reconciliation_date' => '2026-07-01',
+            'status' => 'partial',
+            'required_sections' => ['general', 'pure_gold'],
+        ]);
+        $report->sections()->create([
+            'section_type' => 'general',
+            'status' => 'returned',
+            'submitted_by_admin_id' => $first->id,
+        ]);
+        $report->sections()->create([
+            'section_type' => 'pure_gold',
+            'status' => 'confirmed',
+            'submitted_by_admin_id' => $second->id,
+        ]);
+
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/stats/current?month=2026-07&date=2026-07-01&admin_user_id='.$first->id)
+            ->assertOk()
+            ->assertJsonPath('cash', 725)
+            ->assertJsonPath('today.sales', 200)
+            ->assertJsonPath('today.exchange', 50)
+            ->assertJsonPath('anomalies.unsubmitted', 1)
+            ->assertJsonPath('anomalies.returned', 1)
+            ->assertJsonPath('trend_7_days.5.sales', 100)
+            ->assertJsonPath('trend_7_days.6.sales', 200);
+
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/transactions?date_from=2026-07-01&date_to=2026-07-01&admin_user_id='.$first->id)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.amount', '200.00');
+
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/exchanges?date=2026-07-01&admin_user_id='.$first->id)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.amount', '50.00');
+    }
+
     public function test_admin_transactions_default_to_50_per_page_and_filter_by_date_range(): void
     {
         $this->seed();

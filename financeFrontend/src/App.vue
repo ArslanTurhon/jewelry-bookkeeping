@@ -17,6 +17,8 @@ const loading = ref(false)
 const activeMenu = ref(adminUser.value?.is_super_admin ? 'dashboard' : 'reconciliation')
 const mobileMenu = ref(false)
 const month = ref(today().slice(0, 7))
+const dashboardDate = ref(today())
+const selectedEmployeeId = ref('')
 const stats = ref(null)
 const trendChartElement = ref(null)
 let trendChart = null
@@ -36,7 +38,7 @@ const transactionDialog = ref(false)
 const editingId = ref(null)
 const i18n = ref({ translations: {}, languages: [], enums: {} })
 const recyclePrice = reactive({ price_date: today(), reference_gold_price: 0, reference_silver_price: 0 })
-const filters = reactive({ business_type: '', payment_account: '', product_type: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
+const filters = reactive({ business_type: '', payment_account: '', product_type: '', wrap_material: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
 const pagination = reactive({ page: 1, perPage: 50, total: 0 })
 const users = ref([])
 const stores = ref([])
@@ -68,6 +70,8 @@ const reconciliationToday = ref({ sections: [] })
 const reconciliationReports = ref([])
 const reconciliationHistory = ref([])
 const reconciliationLoading = ref(false)
+const reconciliationDate = ref('')
+const reconciliationEmployeeId = ref('')
 const reconciliationReminderShown = ref(false)
 const reconciliationDraftTimers = new Map()
 const rolePresets = {
@@ -90,6 +94,10 @@ const outboundAuthorized = computed({
   },
 })
 const canWriteCurrentStore = computed(() => !adminUser.value?.is_super_admin || selectedStoreId.value !== 'all')
+const dashboardEmployees = computed(() => users.value.filter((user) => {
+  if (user.is_super_admin || !user.enabled) return false
+  return selectedStoreId.value === 'all' || String(user.store_id) === String(selectedStoreId.value)
+}))
 const visibleMenus = computed(() => [
   { key: 'dashboard', label: '首页', icon: Wallet, visible: Boolean(adminUser.value?.is_super_admin) },
   { key: 'transactions', label: '流水', icon: Money, visible: canUseTransactions.value },
@@ -120,30 +128,18 @@ const paymentOptions = computed(() => {
   return options
 })
 const stockOverview = computed(() => {
-  const sale = stats.value?.stock?.sale_stock?.summary || {}
-  const scrap = stats.value?.stock?.scrap_stock?.summary || {}
-  return [
-    {
-      label: '店内黄金',
-      value: number(sale.pure_gold_weight) + number(sale.wrapped_gold_weight),
-      detail: `纯金 ${formatWeight(sale.pure_gold_weight)}g / 金包 ${formatWeight(sale.wrapped_gold_weight)}g`,
-    },
-    {
-      label: '回收黄金',
-      value: number(scrap.pure_gold_weight) + number(scrap.wrapped_gold_weight),
-      detail: `纯金 ${formatWeight(scrap.pure_gold_weight)}g / 金包 ${formatWeight(scrap.wrapped_gold_weight)}g`,
-    },
-    {
-      label: '店内白银',
-      value: number(sale.silver_weight),
-      detail: '销售库存银重',
-    },
-    {
-      label: '回收白银',
-      value: number(scrap.silver_weight),
-      detail: '旧料库银重',
-    },
-  ]
+  const stock = stats.value?.stock || {}
+  const entries = []
+  for (const [bucket, prefix] of [['sale_stock', '销售货'], ['scrap_stock', '回收料']]) {
+    const products = stock[bucket]?.products || {}
+    entries.push(
+      { label: `${prefix}纯金`, value: products.pure_gold?.pure_gold_weight, detail: `${products.pure_gold?.pieces || 0}件`, stock_bucket: bucket, product_type: 'pure_gold' },
+      { label: `${prefix}纯银`, value: products.pure_silver?.silver_weight, detail: `${products.pure_silver?.pieces || 0}件`, stock_bucket: bucket, product_type: 'pure_silver' },
+      { label: `${prefix}金包银`, value: products.gold_wrapped_silver?.wrapped_gold_weight, detail: `银${formatWeight(products.gold_wrapped_silver?.silver_weight)}g / ${products.gold_wrapped_silver?.pieces || 0}件`, stock_bucket: bucket, product_type: 'gold_wrapped', wrap_material: 'silver' },
+      { label: `${prefix}金包铜`, value: products.gold_wrapped_copper?.wrapped_gold_weight, detail: `铜${formatWeight(products.gold_wrapped_copper?.copper_weight)}g / ${products.gold_wrapped_copper?.pieces || 0}件`, stock_bucket: bucket, product_type: 'gold_wrapped', wrap_material: 'copper' },
+    )
+  }
+  return entries
 })
 const recycleAmount = computed(() => itemRows.value.reduce((sum, item) => {
   if (form.product_type === 'pure_gold') return sum + number(item.pure_gold_weight) * number(item.gold_unit_price)
@@ -351,6 +347,7 @@ async function loadStores() {
 async function changeStore(value) {
   selectedStoreId.value = String(value || '')
   localStorage.setItem('selected_store_id', selectedStoreId.value || 'all')
+  selectedEmployeeId.value = ''
   await refresh()
   if (selectedStoreId.value !== 'all') {
     if (hasPermission('opening') && selectedStoreId.value) await loadOpening()
@@ -416,7 +413,9 @@ async function loadMe() {
 }
 
 async function loadStats() {
-  const { data } = await api.get('/admin/stats/current', { params: { month: month.value } })
+  const { data } = await api.get('/admin/stats/current', {
+    params: { month: month.value, date: dashboardDate.value, admin_user_id: selectedEmployeeId.value || '' },
+  })
   stats.value = data
   await nextTick()
   renderTrendChart()
@@ -456,11 +455,17 @@ function renderTrendChart() {
       },
     ],
   })
+  trendChart.off('click')
+  trendChart.on('click', (params) => {
+    const date = stats.value?.trend_7_days?.[params.dataIndex]?.date
+    const businessType = params.seriesName === '销售收入' ? 'sale' : 'recycle'
+    if (date) openTransactionSource(businessType, { date })
+  })
 }
 
 async function loadTransactions() {
   const { data } = await api.get('/admin/transactions', {
-    params: { ...filters, month: month.value, page: pagination.page, per_page: pagination.perPage },
+    params: { ...filters, admin_user_id: selectedEmployeeId.value || '', month: month.value, page: pagination.page, per_page: pagination.perPage },
   })
   transactions.value = data.data || []
   pagination.total = data.total || 0
@@ -469,9 +474,19 @@ async function loadTransactions() {
 
 async function loadExchanges() {
   const { data } = await api.get('/admin/exchanges', {
-    params: { store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value, per_page: 50 },
+    params: {
+      store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value,
+      date: dashboardDate.value,
+      admin_user_id: selectedEmployeeId.value || '',
+      per_page: 50,
+    },
   })
   exchanges.value = data.data || []
+}
+
+async function openExchangeSource() {
+  activeMenu.value = 'exchanges'
+  await loadExchanges()
 }
 
 async function loadScrapOutbounds() {
@@ -664,7 +679,11 @@ async function loadReconciliations() {
   try {
     if (adminUser.value?.is_super_admin) {
       const { data } = await api.get('/admin/reconciliations', {
-        params: { store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value },
+        params: {
+          store_id: selectedStoreId.value === 'all' ? '' : selectedStoreId.value,
+          date: reconciliationDate.value,
+          admin_user_id: reconciliationEmployeeId.value || '',
+        },
       })
       reconciliationReports.value = data.data || []
     } else {
@@ -771,19 +790,21 @@ async function applyFilters() {
 }
 
 function clearFilters() {
-  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
+  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', wrap_material: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
   applyFilters()
 }
 
 async function openTransactionSource(businessType = '', options = {}) {
+  if (options.date) month.value = String(options.date).slice(0, 7)
   Object.assign(filters, {
     business_type: businessType,
     payment_account: '',
     product_type: options.product_type || '',
+    wrap_material: options.wrap_material || '',
     stock_bucket: options.stock_bucket || '',
     status: 'active',
-    date_from: options.today ? today() : '',
-    date_to: options.today ? today() : '',
+    date_from: options.date || '',
+    date_to: options.date || '',
   })
   pagination.page = 1
   activeMenu.value = 'transactions'
@@ -1110,6 +1131,24 @@ onBeforeUnmount(() => trendChart?.dispose())
               <el-option v-for="store in stores.filter((item) => item.enabled)" :key="store.id" :label="store.name" :value="String(store.id)" />
             </el-select>
             <el-tag v-else>{{ adminUser?.store?.name || '所属店铺' }}</el-tag>
+            <el-date-picker
+              v-if="adminUser?.is_super_admin && activeMenu === 'dashboard'"
+              v-model="dashboardDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 145px"
+              @change="loadStats"
+            />
+            <el-select
+              v-if="adminUser?.is_super_admin && activeMenu === 'dashboard'"
+              v-model="selectedEmployeeId"
+              clearable
+              placeholder="全部员工"
+              style="width: 140px"
+              @change="loadStats"
+            >
+              <el-option v-for="employee in dashboardEmployees" :key="employee.id" :label="employee.name" :value="employee.id" />
+            </el-select>
             <el-date-picker v-model="month" type="month" value-format="YYYY-MM" @change="refresh" />
             <el-button :icon="Refresh" @click="refresh">刷新</el-button>
           </div>
@@ -1132,10 +1171,10 @@ onBeforeUnmount(() => trendChart?.dispose())
           </section>
 
           <el-row :gutter="16" class="section">
-            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('sale', { today: true })"><el-statistic title="今日销售" :value="stats.today.sales" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('recycle', { today: true })"><el-statistic title="今日回收" :value="stats.today.recycle" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="selectMenu('exchanges')"><el-statistic title="今日换现" :value="stats.today.exchange" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('operating_expense', { today: true })"><el-statistic title="今日支出" :value="stats.today.operating_expenses" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('sale', { date: dashboardDate })"><el-statistic title="当日销售" :value="stats.today.sales" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('recycle', { date: dashboardDate })"><el-statistic title="当日回收" :value="stats.today.recycle" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openExchangeSource"><el-statistic title="当日换现" :value="stats.today.exchange" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('operating_expense', { date: dashboardDate })"><el-statistic title="当日支出" :value="stats.today.operating_expenses" prefix="¥" /></el-card></el-col>
           </el-row>
 
           <el-row :gutter="16">
@@ -1158,7 +1197,7 @@ onBeforeUnmount(() => trendChart?.dispose())
             <template #header>库存克重概览</template>
             <el-row :gutter="16">
               <el-col v-for="item in stockOverview" :key="item.label" :xs="24" :sm="12" :lg="6">
-                <div class="stock-metric" role="button" tabindex="0" @click="openTransactionSource('', { stock_bucket: item.label.includes('回收') ? 'scrap_stock' : 'sale_stock' })" @keyup.enter="openTransactionSource('', { stock_bucket: item.label.includes('回收') ? 'scrap_stock' : 'sale_stock' })">
+                <div class="stock-metric" role="button" tabindex="0" @click="openTransactionSource('', item)" @keyup.enter="openTransactionSource('', item)">
                   <span>{{ item.label }}</span>
                   <strong>{{ formatWeight(item.value) }}g</strong>
                   <small>{{ item.detail }}</small>
@@ -1406,6 +1445,34 @@ onBeforeUnmount(() => trendChart?.dispose())
               </div>
               <div class="table-scroll">
                 <el-table :data="reconciliationHistory" stripe>
+                  <el-table-column type="expand">
+                    <template #default="{ row }">
+                      <div class="reconciliation-expanded">
+                        <section v-for="section in row.sections" :key="section.id" class="review-section">
+                          <div class="reconciliation-heading">
+                            <div>
+                              <h4>{{ section.section_type === 'pure_gold' ? '纯金回收' : '综合业务' }}</h4>
+                              <p>提交人：{{ section.submitted_by?.name || '尚未提交' }} · 审核人：{{ section.reviewed_by?.name || '尚未审核' }}</p>
+                            </div>
+                            <el-tag :type="reconciliationStatusType(section.status)">{{ reconciliationStatus(section.status) }}</el-tag>
+                          </div>
+                          <el-descriptions v-if="Object.keys(section.business_summary || {}).length" title="业务合计" :column="2" border>
+                            <el-descriptions-item v-for="(value, field) in section.business_summary" :key="field" :label="reconciliationLabels[field] || field">{{ value }}</el-descriptions-item>
+                          </el-descriptions>
+                          <el-descriptions v-if="Object.keys(section.actual_snapshot || {}).length" title="盘点结果" :column="1" border class="section">
+                            <el-descriptions-item v-for="(value, field) in section.actual_snapshot" :key="field" :label="reconciliationLabels[field] || field">
+                              <template v-if="section.book_snapshot">
+                                账面 {{ section.book_snapshot[field] }} / 实盘 {{ value }} / 差额
+                                <strong :class="{ 'difference-value': Number(section.differences?.[field]) !== 0 }">{{ section.differences?.[field] }}</strong>
+                              </template>
+                              <template v-else>实盘 {{ value }}</template>
+                            </el-descriptions-item>
+                          </el-descriptions>
+                          <el-alert v-if="section.return_reason" :title="`退回原因：${section.return_reason}`" type="error" :closable="false" class="section" />
+                        </section>
+                      </div>
+                    </template>
+                  </el-table-column>
                   <el-table-column prop="date" label="日期" width="130" />
                   <el-table-column prop="store.name" label="店铺" min-width="150" />
                   <el-table-column label="状态" width="120">
@@ -1425,7 +1492,13 @@ onBeforeUnmount(() => trendChart?.dispose())
                 <h3>每日交账</h3>
                 <p>每家店每天一份总结果，纯金和综合业务可分别处理。</p>
               </div>
-              <el-button :icon="Refresh" @click="loadReconciliations">刷新</el-button>
+              <div class="reconciliation-owner-filters">
+                <el-date-picker v-model="reconciliationDate" type="date" value-format="YYYY-MM-DD" clearable placeholder="全部日期" @change="loadReconciliations" />
+                <el-select v-model="reconciliationEmployeeId" clearable placeholder="全部员工" @change="loadReconciliations">
+                  <el-option v-for="employee in dashboardEmployees" :key="employee.id" :label="employee.name" :value="employee.id" />
+                </el-select>
+                <el-button :icon="Refresh" @click="loadReconciliations">刷新</el-button>
+              </div>
             </div>
             <div class="table-scroll">
               <el-table :data="reconciliationReports" stripe border row-key="id">
