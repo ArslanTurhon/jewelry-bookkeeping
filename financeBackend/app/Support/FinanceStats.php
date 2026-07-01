@@ -185,7 +185,9 @@ class FinanceStats
             fn (Transaction $record) => $record->affects_finance && $record->transaction_date->format('Y-m-d') === $today,
         );
         $todayExchanges = $exchanges->filter(fn (Exchange $exchange) => $exchange->exchange_date->format('Y-m-d') === $today);
-        $trendRecords = $records->filter(fn (Transaction $record) => $record->transaction_date->gte($start));
+        $trendRecords = $records->filter(
+            fn (Transaction $record) => $record->affects_finance && $record->transaction_date->gte($start),
+        );
         $reports = DailyReconciliation::query()
             ->whereDate('reconciliation_date', $today)
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))

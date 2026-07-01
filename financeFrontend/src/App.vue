@@ -36,7 +36,7 @@ const transactionDialog = ref(false)
 const editingId = ref(null)
 const i18n = ref({ translations: {}, languages: [], enums: {} })
 const recyclePrice = reactive({ price_date: today(), reference_gold_price: 0, reference_silver_price: 0 })
-const filters = reactive({ business_type: '', payment_account: '', product_type: '', status: 'active', date_from: '', date_to: '' })
+const filters = reactive({ business_type: '', payment_account: '', product_type: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
 const pagination = reactive({ page: 1, perPage: 50, total: 0 })
 const users = ref([])
 const stores = ref([])
@@ -769,8 +769,23 @@ async function applyFilters() {
 }
 
 function clearFilters() {
-  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', status: 'active', date_from: '', date_to: '' })
+  Object.assign(filters, { business_type: '', payment_account: '', product_type: '', stock_bucket: '', status: 'active', date_from: '', date_to: '' })
   applyFilters()
+}
+
+async function openTransactionSource(businessType = '', options = {}) {
+  Object.assign(filters, {
+    business_type: businessType,
+    payment_account: '',
+    product_type: options.product_type || '',
+    stock_bucket: options.stock_bucket || '',
+    status: 'active',
+    date_from: options.today ? today() : '',
+    date_to: options.today ? today() : '',
+  })
+  pagination.page = 1
+  activeMenu.value = 'transactions'
+  await loadTransactions()
 }
 
 async function loadUsers() {
@@ -1115,10 +1130,10 @@ onBeforeUnmount(() => trendChart?.dispose())
           </section>
 
           <el-row :gutter="16" class="section">
-            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日销售" :value="stats.today.sales" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日回收" :value="stats.today.recycle" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日换现" :value="stats.today.exchange" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="6"><el-card><el-statistic title="今日支出" :value="stats.today.operating_expenses" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('sale', { today: true })"><el-statistic title="今日销售" :value="stats.today.sales" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('recycle', { today: true })"><el-statistic title="今日回收" :value="stats.today.recycle" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="selectMenu('exchanges')"><el-statistic title="今日换现" :value="stats.today.exchange" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="6"><el-card shadow="hover" @click="openTransactionSource('operating_expense', { today: true })"><el-statistic title="今日支出" :value="stats.today.operating_expenses" prefix="¥" /></el-card></el-col>
           </el-row>
 
           <el-row :gutter="16">
@@ -1141,7 +1156,7 @@ onBeforeUnmount(() => trendChart?.dispose())
             <template #header>库存克重概览</template>
             <el-row :gutter="16">
               <el-col v-for="item in stockOverview" :key="item.label" :xs="24" :sm="12" :lg="6">
-                <div class="stock-metric">
+                <div class="stock-metric" role="button" tabindex="0" @click="openTransactionSource('', { stock_bucket: item.label.includes('回收') ? 'scrap_stock' : 'sale_stock' })" @keyup.enter="openTransactionSource('', { stock_bucket: item.label.includes('回收') ? 'scrap_stock' : 'sale_stock' })">
                   <span>{{ item.label }}</span>
                   <strong>{{ formatWeight(item.value) }}g</strong>
                   <small>{{ item.detail }}</small>
@@ -1192,6 +1207,7 @@ onBeforeUnmount(() => trendChart?.dispose())
               <el-form-item label="业务"><el-select v-model="filters.business_type" clearable @change="applyFilters"><el-option label="销售" value="sale" /><el-option label="收入" value="income" /><el-option label="回收" value="recycle" /><el-option v-if="adminUser?.is_super_admin" label="支出" value="operating_expense" /></el-select></el-form-item>
               <el-form-item v-if="adminUser?.is_super_admin" label="状态"><el-select v-model="filters.status" @change="applyFilters"><el-option label="有效" value="active" /><el-option label="已作废" value="voided" /><el-option label="全部" value="all" /></el-select></el-form-item>
               <el-form-item label="账户"><el-select v-model="filters.payment_account" clearable @change="applyFilters"><el-option label="现金" value="cash" /><el-option label="线上" value="online" /><el-option label="现金+线上" value="mixed" /><el-option label="纯金回收资金" value="pure_gold_fund" /></el-select></el-form-item>
+              <el-form-item label="库存"><el-select v-model="filters.stock_bucket" clearable @change="applyFilters"><el-option label="销售货" value="sale_stock" /><el-option label="回收旧料" value="scrap_stock" /></el-select></el-form-item>
               <el-form-item label="开始日期"><el-date-picker v-model="filters.date_from" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
               <el-form-item label="结束日期"><el-date-picker v-model="filters.date_to" type="date" value-format="YYYY-MM-DD" @change="applyFilters" /></el-form-item>
               <el-form-item>

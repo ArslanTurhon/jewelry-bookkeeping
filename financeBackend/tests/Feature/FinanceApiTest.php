@@ -1173,6 +1173,17 @@ class FinanceApiTest extends TestCase
         Carbon::setTestNow('2026-07-01 18:00:00');
         $this->seed();
         $store = Store::query()->where('is_default', true)->sole();
+        foreach ([
+            'sale_stock.pure_gold.pure_gold_weight' => 10,
+            'sale_stock.pure_gold.pieces' => 10,
+            'sale_stock.pure_silver.silver_weight' => 10,
+            'sale_stock.pure_silver.pieces' => 10,
+            'sale_stock.gold_wrapped_silver.wrapped_gold_weight' => 10,
+            'sale_stock.gold_wrapped_silver.silver_weight' => 10,
+            'sale_stock.gold_wrapped_silver.pieces' => 10,
+        ] as $key => $value) {
+            OpeningBalance::query()->where('store_id', $store->id)->where('key', $key)->update(['value' => $value]);
+        }
         $staff = AdminUser::query()->create([
             'store_id' => $store->id,
             'name' => '合计员工',
@@ -1317,7 +1328,46 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('monthly.sales', 100)
             ->assertJsonPath('monthly.recycle', 50)
             ->assertJsonPath('stock.sale_stock.products.pure_silver.silver_weight', 3)
-            ->assertJsonPath('stock.scrap_stock.products.pure_silver.silver_weight', 1);
+            ->assertJsonPath('stock.scrap_stock.products.pure_silver.silver_weight', 1)
+            ->assertJsonPath('trend_7_days.6.sales', 100)
+            ->assertJsonPath('trend_7_days.6.recycle', 50);
+    }
+
+    public function test_reconciliation_summary_cannot_create_negative_stock(): void
+    {
+        Carbon::setTestNow('2026-07-01 18:00:00');
+        $this->seed();
+        $store = Store::query()->where('is_default', true)->sole();
+        $staff = AdminUser::query()->create([
+            'store_id' => $store->id,
+            'name' => '超卖员工',
+            'username' => 'negative-stock',
+            'email' => 'negative-stock@example.test',
+            'password' => 'password',
+            'enabled' => true,
+            'permissions' => ['transactions'],
+            'api_token' => 'negative-stock-token',
+        ]);
+        $summary = array_fill_keys(app(ReconciliationService::class)->businessSummaryFields('general'), 0);
+        $summary = array_replace($summary, [
+            'sales_amount' => 100,
+            'sales_cash' => 100,
+            'sales_pure_silver_amount' => 100,
+            'sales_pure_silver_weight' => 1,
+            'sales_pure_silver_pieces' => 1,
+        ]);
+        $actual = app(ReconciliationService::class)->snapshot($store->id, 'general');
+
+        $this->withToken($staff->api_token)
+            ->postJson('/api/admin/reconciliations/today/general/submit', [
+                'no_business' => false,
+                'business_summary' => $summary,
+                'actual_snapshot' => $actual,
+                'difference_reason' => '测试超卖',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('business_summary');
+        $this->assertDatabaseCount('transactions', 0);
     }
 
     public function test_owner_sees_pending_reports_before_staff_open_the_page(): void

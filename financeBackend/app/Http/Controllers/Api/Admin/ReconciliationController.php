@@ -125,6 +125,13 @@ class ReconciliationController extends Controller
                 $report->reconciliation_date->format('Y-m-d'),
             );
             $book = $service->snapshot($admin->store_id, $sectionType);
+            $negativeStock = collect($book)->contains(
+                fn ($value, string $field) => (str_contains($field, 'weight') || str_contains($field, 'pieces'))
+                    && (float) $value < 0,
+            );
+            if ($negativeStock) {
+                throw ValidationException::withMessages(['business_summary' => '业务合计会造成负库存，请核对销售重量和件数']);
+            }
             $differences = $service->differences($data['actual_snapshot'], $book);
             if ($service->hasDifferences($differences) && blank($data['difference_reason'] ?? null)) {
                 throw ValidationException::withMessages(['difference_reason' => '有差额时必须填写原因']);
