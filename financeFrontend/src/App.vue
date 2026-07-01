@@ -291,6 +291,7 @@ async function login() {
     token.value = data.token
     adminUser.value = data.admin
     activeMenu.value = data.admin.is_super_admin ? 'dashboard' : 'reconciliation'
+    reconciliationReminderShown.value = false
     reconciliationToday.value = { sections: [] }
     reconciliationReports.value = []
     reconciliationHistory.value = []
@@ -311,6 +312,7 @@ function logout() {
   token.value = ''
   adminUser.value = null
   activeMenu.value = 'dashboard'
+  reconciliationReminderShown.value = false
   reconciliationToday.value = { sections: [] }
   reconciliationReports.value = []
   reconciliationHistory.value = []

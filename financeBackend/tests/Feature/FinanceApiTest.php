@@ -1088,6 +1088,12 @@ class FinanceApiTest extends TestCase
         $this->seed();
         $store = Store::query()->where('is_default', true)->sole();
         OpeningBalance::query()->where('store_id', $store->id)->where('key', 'pure_gold_fund')->update(['value' => 10000]);
+        DailyReconciliation::query()->create([
+            'store_id' => $store->id,
+            'reconciliation_date' => '2026-07-01',
+            'status' => 'pending',
+            'required_sections' => [],
+        ]);
 
         $goldStaff = AdminUser::query()->create([
             'store_id' => $store->id,
@@ -1115,6 +1121,7 @@ class FinanceApiTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'sections')
             ->assertJsonPath('sections.0.section_type', 'pure_gold')
+            ->assertJsonPath('sections.0.status', 'draft')
             ->assertJsonMissingPath('sections.0.book_snapshot');
 
         $this->withToken($generalStaff->api_token)
@@ -1122,6 +1129,7 @@ class FinanceApiTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'sections')
             ->assertJsonPath('sections.0.section_type', 'general')
+            ->assertJsonPath('sections.0.status', 'draft')
             ->assertJsonMissingPath('sections.0.book_snapshot');
     }
 
