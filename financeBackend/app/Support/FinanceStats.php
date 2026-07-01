@@ -244,39 +244,84 @@ class FinanceStats
 
     public function accountDetails(string $account, ?string $month = null, string $range = 'month', ?int $storeId = null): array
     {
-        $records = Transaction::query()
+        $transactions = Transaction::query()
             ->active()
+            ->where('affects_finance', true)
             ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
-            ->orderBy('transaction_date')
-            ->orderBy('id')
+            ->get();
+        $exchanges = Exchange::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
+            ->get();
+        $outbounds = ScrapOutbound::query()
+            ->when($storeId, fn (Builder $query) => $query->where('store_id', $storeId))
             ->get();
 
         $keys = $this->accountKeys($account);
         $opening = collect($keys)->sum(fn (string $key) => $this->opening($key, $storeId));
         $balance = $opening;
         $entries = [];
-
-        foreach ($records as $record) {
-            $signed = $this->signedAmountForAccount($record, $account);
-            if ($signed === null) {
-                continue;
+        $events = collect();
+        foreach ($transactions as $transaction) {
+            $signed = $this->signedAmountForAccount($transaction, $account);
+            if ($signed !== null) {
+                $events->push([
+                    'sort' => $transaction->transaction_date->format('Y-m-d').'-1-'.str_pad((string) $transaction->id, 10, '0', STR_PAD_LEFT),
+                    'id' => $transaction->id,
+                    'date' => $transaction->transaction_date->format('Y-m-d'),
+                    'source' => 'transaction',
+                    'business_type' => $transaction->business_type,
+                    'amount' => (float) $transaction->amount,
+                    'signed_amount' => $signed,
+                    'remark' => $transaction->remark,
+                ]);
             }
+        }
+        foreach ($exchanges as $exchange) {
+            $signed = $this->signedExchangeAmount($exchange, $account);
+            if ($signed !== null) {
+                $events->push([
+                    'sort' => $exchange->exchange_date->format('Y-m-d').'-2-'.str_pad((string) $exchange->id, 10, '0', STR_PAD_LEFT),
+                    'id' => $exchange->id,
+                    'date' => $exchange->exchange_date->format('Y-m-d'),
+                    'source' => 'exchange',
+                    'business_type' => 'exchange',
+                    'amount' => (float) $exchange->amount,
+                    'signed_amount' => $signed,
+                    'remark' => $exchange->remark,
+                ]);
+            }
+        }
+        foreach ($outbounds as $outbound) {
+            $signed = $this->signedOutboundAmount($outbound, $account);
+            if ($signed !== null) {
+                $events->push([
+                    'sort' => $outbound->outbound_date->format('Y-m-d').'-3-'.str_pad((string) $outbound->id, 10, '0', STR_PAD_LEFT),
+                    'id' => $outbound->id,
+                    'date' => $outbound->outbound_date->format('Y-m-d'),
+                    'source' => 'scrap_outbound',
+                    'business_type' => 'scrap_outbound',
+                    'amount' => (float) $outbound->received_amount,
+                    'signed_amount' => $signed,
+                    'remark' => $outbound->remark,
+                ]);
+            }
+        }
 
-            $balance += $signed;
-            $date = (string) $record->transaction_date->format('Y-m-d');
+        foreach ($events->sortBy('sort') as $event) {
+            $balance += $event['signed_amount'];
+            $date = $event['date'];
             $inRange = $range === 'all' || ! $month || str_starts_with($date, $month);
 
             if ($inRange) {
                 $entries[] = [
-                    'id' => $record->id,
+                    'id' => $event['id'],
+                    'source' => $event['source'],
                     'transaction_date' => $date,
-                    'business_type' => $record->business_type,
-                    'payment_account' => $record->payment_account,
-                    'online_method' => $record->online_method,
-                    'amount' => round((float) $record->amount, 2),
-                    'signed_amount' => round($signed, 2),
+                    'business_type' => $event['business_type'],
+                    'amount' => round($event['amount'], 2),
+                    'signed_amount' => round($event['signed_amount'], 2),
                     'balance_after' => round($balance, 2),
-                    'remark' => $record->remark,
+                    'remark' => $event['remark'],
                 ];
             }
         }
@@ -493,12 +538,54 @@ class FinanceStats
         $amount = match ($account) {
             'cash' => $this->cashAmount($record),
             'online' => $this->onlineAmount($record),
+            'online_bank' => $record->online_method === 'bank' ? $this->onlineAmount($record) : null,
+            'online_wechat' => $record->online_method === 'wechat' ? $this->onlineAmount($record) : null,
+            'online_alipay' => $record->online_method === 'alipay' ? $this->onlineAmount($record) : null,
             'pure_gold_fund' => $record->payment_account === 'pure_gold_fund' ? (float) $record->amount : null,
             'total' => (float) $record->amount,
             default => null,
         };
 
         return $amount === null || $amount == 0.0 ? null : $sign * $amount;
+    }
+
+    private function signedExchangeAmount(Exchange $exchange, string $account): ?float
+    {
+        $amount = (float) $exchange->amount;
+        $fee = (float) $exchange->fee;
+        $signed = match ($account) {
+            'cash' => $exchange->direction === 'cash_in' ? $amount + $fee : -$amount,
+            'online' => $exchange->direction === 'cash_in' ? -$amount : $amount + $fee,
+            'online_'.$exchange->online_method => $exchange->direction === 'cash_in' ? -$amount : $amount + $fee,
+            'total' => $fee,
+            default => null,
+        };
+
+        return $signed === null || $signed == 0.0 ? null : $signed;
+    }
+
+    private function signedOutboundAmount(ScrapOutbound $outbound, string $account): ?float
+    {
+        $signed = 0.0;
+        if (
+            $account === 'total'
+            || $account === $outbound->payment_account
+            || ($outbound->payment_account === 'online' && $account === 'online_'.$outbound->online_method)
+        ) {
+            $signed += (float) $outbound->received_amount;
+        }
+        foreach ($outbound->fees ?? [] as $fee) {
+            if (
+                $fee['payment_account'] === $account
+                || ($fee['payment_account'] === 'online' && $account === 'online')
+                || ($fee['payment_account'] === 'online' && $account === 'online_'.$fee['online_method'])
+                || ($account === 'total' && in_array($fee['payment_account'], ['cash', 'online'], true))
+            ) {
+                $signed -= (float) $fee['amount'];
+            }
+        }
+
+        return $signed == 0.0 ? null : $signed;
     }
 
     private function cashAmount(Transaction $record): ?float
@@ -536,6 +623,9 @@ class FinanceStats
         return match ($account) {
             'cash' => ['cash'],
             'online' => ['online_bank', 'online_wechat', 'online_alipay'],
+            'online_bank' => ['online_bank'],
+            'online_wechat' => ['online_wechat'],
+            'online_alipay' => ['online_alipay'],
             'pure_gold_fund' => ['pure_gold_fund'],
             'total' => ['cash', 'online_bank', 'online_wechat', 'online_alipay', 'pure_gold_fund'],
             default => [],

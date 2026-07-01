@@ -209,6 +209,11 @@ class FinanceApiTest extends TestCase
             ->assertJsonPath('cash', 1105)
             ->assertJsonPath('online.wechat', 902)
             ->assertJsonPath('today.exchange', 300);
+        $this->withToken($owner->api_token)
+            ->getJson('/api/admin/account-details?account=online_wechat&range=all')
+            ->assertOk()
+            ->assertJsonPath('ending', 902)
+            ->assertJsonCount(2, 'entries');
     }
 
     public function test_exchange_requires_authorized_store_direction_and_online_method(): void

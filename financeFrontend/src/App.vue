@@ -875,6 +875,9 @@ function accountTitle(account) {
   return {
     cash: '现金明细',
     online: '线上明细',
+    online_wechat: '微信明细',
+    online_alipay: '支付宝明细',
+    online_bank: '银行卡明细',
     total: '合计明细',
     pure_gold_fund: '纯金回收资金明细',
   }[account] || '账户明细'
@@ -1120,9 +1123,9 @@ onBeforeUnmount(() => trendChart?.dispose())
 
           <el-row :gutter="16">
             <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('cash')"><el-statistic title="现金" :value="stats.cash" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="微信" :value="stats.online.wechat" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="支付宝" :value="stats.online.alipay" prefix="¥" /></el-card></el-col>
-            <el-col :xs="12" :sm="8" :lg="4"><el-card><el-statistic title="银行卡" :value="stats.online.bank" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('online_wechat')"><el-statistic title="微信" :value="stats.online.wechat" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('online_alipay')"><el-statistic title="支付宝" :value="stats.online.alipay" prefix="¥" /></el-card></el-col>
+            <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('online_bank')"><el-statistic title="银行卡" :value="stats.online.bank" prefix="¥" /></el-card></el-col>
             <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('pure_gold_fund')"><el-statistic title="纯金专用资金" :value="stats.pure_gold_fund" prefix="¥" /></el-card></el-col>
             <el-col :xs="12" :sm="8" :lg="4"><el-card shadow="hover" @click="openAccount('total')"><el-statistic title="资金合计" :value="stats.total" prefix="¥" /></el-card></el-col>
           </el-row>

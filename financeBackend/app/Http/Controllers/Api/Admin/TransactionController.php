@@ -174,7 +174,9 @@ class TransactionController extends Controller
         }
 
         $data = $request->validate([
-            'account' => ['required', Rule::in(['cash', 'online', 'total', 'pure_gold_fund'])],
+            'account' => ['required', Rule::in([
+                'cash', 'online', 'online_bank', 'online_wechat', 'online_alipay', 'total', 'pure_gold_fund',
+            ])],
             'month' => ['nullable', 'date_format:Y-m'],
             'range' => ['nullable', Rule::in(['month', 'all'])],
         ]);
